@@ -2,7 +2,12 @@
 
 * Which AI tools you used and for what tasks
 
+Codex + GPT-5.4
+
 * How you directed/orchestrated them — what worked well, what didn't
+
+1. Init
+    NOT WELL: tends to generate too much details
 
 * Any cases where AI gave incorrect results and how you caught and handled them
 
