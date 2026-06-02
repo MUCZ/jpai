@@ -20,6 +20,15 @@ class TaskStatus(str, Enum):
     FAILED = "failed"
 
 
+class Outcome(str, Enum):
+    SUCCESS = "success"
+    FAILURE = "failure"
+    CANCELLED = "cancelled"
+    TIMEOUT = "timeout"
+    ERROR = "error"
+    UNKNOWN = "unknown"
+
+
 @dataclass
 class TaskRequest:
     task_description: str

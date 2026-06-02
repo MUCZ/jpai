@@ -7,10 +7,15 @@ database, calculator, etc.) with realistic latency.
 import asyncio
 import random
 
+from src.models import Priority
+from src.observability import observe_tool
 
-async def execute_tool(tool_name: str, args: dict) -> dict:
+
+@observe_tool
+async def execute_tool(
+    tool_name: str, args: dict, *, tenant_id: str, priority: Priority
+) -> dict:
     """Execute a single tool and return its result."""
-    # Simulate variable latency per tool type
     latency_map = {
         "search": (0.1, 0.5),
         "database_lookup": (0.05, 0.2),
@@ -18,7 +23,6 @@ async def execute_tool(tool_name: str, args: dict) -> dict:
     }
     low, high = latency_map.get(tool_name, (0.05, 0.3))
     await asyncio.sleep(random.uniform(low, high))
-
     return {
         "tool": tool_name,
         "status": "success",
@@ -26,7 +30,9 @@ async def execute_tool(tool_name: str, args: dict) -> dict:
     }
 
 
-async def execute_tools(tools: list[tuple[str, dict]]) -> list[dict]:
+async def execute_tools(
+    tools: list[tuple[str, dict]], *, tenant_id: str, priority: Priority
+) -> list[dict]:
     """Execute multiple tools and return results in order.
 
     Args:
@@ -37,6 +43,8 @@ async def execute_tools(tools: list[tuple[str, dict]]) -> list[dict]:
     """
     results = []
     for tool_name, args in tools:
-        result = await execute_tool(tool_name, args)
+        result = await execute_tool(
+            tool_name, args, tenant_id=tenant_id, priority=priority
+        )
         results.append(result)
     return results

@@ -16,3 +16,19 @@ services:
     command: uvicorn src.mock_llm_server:app --host 0.0.0.0 --port 8081
     ports:
       - "8081:8081"
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./conf/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./conf/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources

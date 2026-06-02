@@ -36,7 +36,21 @@ Exercise concurrent traffic with `python -m tests.test_load`.
 Follow standard Python style: 4-space indentation, `snake_case` for functions and variables, `PascalCase` for classes, and explicit type hints where the code already uses them. Keep module-level docstrings concise and factual. Prefer small async functions with clear boundaries between HTTP, orchestration, and mock infrastructure. No formatter or linter is configured in this repository, so keep changes PEP 8-aligned and consistent with surrounding files.
 
 ## Testing Guidelines
-There is no formal unit-test suite yet; the current test asset is the load script in `tests/test_load.py`. For behavior changes, add focused tests under `tests/` using `test_*.py` naming. At minimum, verify `/health`, one successful `POST /tasks`, and failure paths involving the mock LLM.
+Focused tests live under `tests/` using `test_*.py` naming. For behavior changes, verify `/health`, one successful `POST /tasks`, and failure paths involving the mock LLM.
+
+Run the observability/unit test suite in Docker so the environment matches the repo's Python 3.12 container:
+
+```bash
+docker compose run --build --rm agent-service python -m unittest tests.test_observability
+```
+
+For a quick syntax check without starting the full stack:
+
+```bash
+python3 -m compileall src tests
+```
+
+Use `python -m tests.test_load` for concurrent load verification after the stack is running.
 
 ## Configuration & Runtime Notes
 `LLM_SERVER_URL` is the main runtime setting. Task timeout, retry, and rate-limit settings are defined in `src/config.py`; update them deliberately and mention any operational impact in the PR.
