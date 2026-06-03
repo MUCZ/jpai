@@ -1,25 +1,77 @@
-** AI Tool Usage** 
+# Agent Platform
 
-* Which AI tools you used and for what tasks
+A FastAPI-based agent execution service with structured logging, Prometheus metrics, and OpenTelemetry traces.
 
-Codex + GPT-5.4 for code generation
-Claude Code + Claude Opus / Antigravity + Gemini for Code review
+## Local stack
 
-* How you directed/orchestrated them — what worked well, what didn't
+Use Docker for the standard local setup:
 
-Well:
-- understanding 
-- simple refact
-- implmentation
-- report & summary
+```bash
+docker compose up --build
+```
 
+This starts:
 
-1. Init
-    NOT WELL: tends to generate too much details
-2. Tech deasign :use logging instead of struct log -> refact
-3. dupcode, dump and long code-> steer and review and refac
-4. cross checking
+- API: `http://localhost:8080`
+- Mock LLM: `http://localhost:8081`
+- Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3000` (admin / `admin`)
+- Jaeger: `http://localhost:16686`
 
-* Any cases where AI gave incorrect results and how you caught and handled them
+The application exports spans to Jaeger over OTLP HTTP in local Docker via:
 
-> **We evaluate your ability to effectively leverage AI, not whether you avoided it.** A candidate who skillfully orchestrates AI agents to accelerate the work — then produces high-quality diagnosis with authentic evidence — is exactly what we're looking for.
+- `OTEL_SERVICE_NAME=agent-service`
+- `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318/v1/traces`
+
+`agent-service` waits for Jaeger to become healthy before startup so traces are not dropped during local boot.
+
+## Useful checks
+
+Health endpoint:
+
+```bash
+curl http://localhost:8080/health
+```
+
+Create a task:
+
+```bash
+curl -X POST http://localhost:8080/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "task_description": "Summarise customer feedback",
+    "tenant_id": "tenant-alpha",
+    "priority": "normal"
+  }'
+```
+
+Fetch Prometheus metrics:
+
+```bash
+curl http://localhost:8080/metrics
+```
+
+## Trace workflow
+
+1. Start the stack with `docker compose up --build`.
+2. Send a `POST /tasks` request.
+3. Note the `X-Trace-Id` response header.
+4. Open Jaeger at `http://localhost:16686`.
+5. Search for service `agent-service` and inspect the trace tree.
+6. You should see the HTTP request span plus nested task, stage, tool, and LLM spans.
+
+Grafana also provisions a Jaeger datasource, so you can inspect traces in Grafana Explore alongside Prometheus metrics.
+
+## Tests
+
+Run the observability test suite in Docker:
+
+```bash
+docker compose run --build --rm agent-service python -m unittest tests.test_observability
+```
+
+For concurrent traffic generation after the stack is running:
+
+```bash
+python -m tests.test_load
+```
