@@ -21,5 +21,5 @@ RETRY_BASE_DELAY = 0.5            # seconds
 RETRY_BACKOFF_FACTOR = 2.0        # exponential multiplier
 
 # Metrics label cardinality control
-METRICS_TENANT_LABEL_MODE = os.getenv("METRICS_TENANT_LABEL_MODE", "bucketed")
+METRICS_TENANT_LABEL_MODE = os.getenv("METRICS_TENANT_LABEL_MODE", "direct") # bucketed or direct
 METRICS_TENANT_BUCKET_COUNT = int(os.getenv("METRICS_TENANT_BUCKET_COUNT", "64"))

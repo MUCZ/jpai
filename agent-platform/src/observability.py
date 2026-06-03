@@ -20,13 +20,16 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest, ProcessCollector, GCCollector, PlatformCollector
 from src.config import METRICS_TENANT_BUCKET_COUNT, METRICS_TENANT_LABEL_MODE
 
 _LOGGING_INITIALIZED = False
 _TRACING_INITIALIZED = False
 
 REGISTRY = CollectorRegistry(auto_describe=True)
+ProcessCollector(registry=REGISTRY)
+GCCollector(registry=REGISTRY)
+PlatformCollector(registry=REGISTRY)
 
 HTTP_REQUESTS_TOTAL = Counter(
     "agent_http_requests_total",
