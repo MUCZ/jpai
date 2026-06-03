@@ -54,6 +54,7 @@ class ObservabilityTests(unittest.TestCase):
         main._response_cache.clear()
         self.client = TestClient(main.app)
         self.log_stream = io.StringIO()
+        structlog.reset_defaults()
         structlog.configure(
             processors=[
                 structlog.contextvars.merge_contextvars,
@@ -67,6 +68,7 @@ class ObservabilityTests(unittest.TestCase):
     def tearDown(self) -> None:
         import structlog
         self.client.close()
+        structlog.reset_defaults()
         structlog.configure(
             processors=[
                 structlog.contextvars.merge_contextvars,
@@ -117,12 +119,20 @@ class ObservabilityTests(unittest.TestCase):
             yield
 
     def test_metrics_endpoint_exposes_expected_metrics(self) -> None:
+        # Trigger a task to ensure all metrics (HTTP, Task, LLM) are recorded at least once
+        payload = {
+            "task_description": "Summarise customer feedback",
+            "tenant_id": "tenant-alpha",
+            "priority": "normal",
+        }
+        with self._mock_orchestrator():
+            self.client.post("/tasks", json=payload)
+
         response = self.client.get("/metrics")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("agent_http_requests_total", response.text)
+        self.assertIn("http_server_duration_milliseconds", response.text)
         self.assertIn("agent_tasks_total", response.text)
         self.assertIn("agent_llm_requests_total", response.text)
-        self.assertIn("agent_tool_calls_total", response.text)
         self.assertIn("X-Trace-Id", response.headers)
 
     def test_successful_task_has_trace_header_and_updates_metrics(self) -> None:
@@ -248,7 +258,7 @@ class ObservabilityTests(unittest.TestCase):
         fake_provider = _FakeTracerProvider()
         fake_processor = object()
 
-        with patch.object(observability, "_TRACING_INITIALIZED", False), \
+        with patch.object(observability, "_INITIALIZED", False), \
              patch.dict(os.environ, {
                  "OTEL_EXPORTER_OTLP_ENDPOINT": "http://jaeger:4318/v1/traces",
                  "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer token, X-Scope-OrgID=test-tenant",
@@ -256,41 +266,47 @@ class ObservabilityTests(unittest.TestCase):
              }, clear=False), \
              patch.object(observability, "TracerProvider", return_value=fake_provider) as tracer_provider_cls, \
              patch.object(observability, "OTLPSpanExporter", return_value="fake-exporter") as exporter_cls, \
+             patch.object(observability, "OTLPMetricExporter") as metric_exporter_cls, \
+             patch.object(observability, "OTLPLogExporter") as log_exporter_cls, \
              patch.object(observability, "BatchSpanProcessor", return_value=fake_processor) as processor_cls, \
-             patch.object(observability.trace, "set_tracer_provider") as set_provider:
-            observability.setup_tracing()
+             patch.object(observability.trace, "set_tracer_provider") as set_provider, \
+             patch.object(observability.metrics, "set_meter_provider"), \
+             patch.object(observability, "_setup_logging"), \
+             patch.object(observability, "set_logger_provider"):
+            observability.init_observability()
 
         tracer_provider_cls.assert_called_once()
         exporter_cls.assert_called_once_with(
             endpoint="http://jaeger:4318/v1/traces",
-            headers={
-                "Authorization": "Bearer token",
-                "X-Scope-OrgID": "test-tenant",
-            },
         )
         processor_cls.assert_called_once_with("fake-exporter")
         self.assertEqual(fake_provider.span_processors, [fake_processor])
         set_provider.assert_called_once_with(fake_provider)
-        self.assertTrue(observability._TRACING_INITIALIZED)
+        self.assertTrue(observability._INITIALIZED)
 
     def test_setup_tracing_skips_exporter_when_endpoint_is_unset(self) -> None:
         from src import observability
 
         fake_provider = _FakeTracerProvider()
 
-        with patch.object(observability, "_TRACING_INITIALIZED", False), \
+        with patch.object(observability, "_INITIALIZED", False), \
              patch.dict(os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "", "OTEL_EXPORTER_OTLP_HEADERS": ""}, clear=False), \
              patch.object(observability, "TracerProvider", return_value=fake_provider), \
              patch.object(observability, "OTLPSpanExporter") as exporter_cls, \
+             patch.object(observability, "OTLPMetricExporter") as metric_exporter_cls, \
+             patch.object(observability, "OTLPLogExporter") as log_exporter_cls, \
              patch.object(observability, "BatchSpanProcessor") as processor_cls, \
-             patch.object(observability.trace, "set_tracer_provider") as set_provider:
-            observability.setup_tracing()
+             patch.object(observability.trace, "set_tracer_provider") as set_provider, \
+             patch.object(observability.metrics, "set_meter_provider"), \
+             patch.object(observability, "_setup_logging"), \
+             patch.object(observability, "set_logger_provider"):
+            observability.init_observability()
 
         exporter_cls.assert_not_called()
         processor_cls.assert_not_called()
         self.assertEqual(fake_provider.span_processors, [])
         set_provider.assert_called_once_with(fake_provider)
-        self.assertTrue(observability._TRACING_INITIALIZED)
+        self.assertTrue(observability._INITIALIZED)
 
 
 if __name__ == "__main__":

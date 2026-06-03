@@ -10,7 +10,7 @@ import structlog
 import random
 import time
 
-from opentelemetry.trace import SpanKind, Status, StatusCode
+from opentelemetry.trace import Status, StatusCode
 
 from src.config import (
     LLM_SERVER_URL,
@@ -112,7 +112,7 @@ async def call_llm(
     # Unified retry policy: all transient errors (500, 429, timeout)
     # use the same exponential backoff strategy for simplicity
     with tracer.start_as_current_span(
-        f"llm.{operation}", kind=SpanKind.CLIENT
+        f"llm.{operation}"
     ) as span, bind_context(operation=operation):
         span.set_attribute("llm.operation", operation)
         span.set_attribute("llm.max_tokens", max_tokens)
@@ -132,7 +132,7 @@ async def call_llm(
             try:
                 rl_start = time.perf_counter()
                 await _rate_limiter.acquire()
-                LLM_RATE_LIMIT_WAIT.observe(time.perf_counter() - rl_start)
+                LLM_RATE_LIMIT_WAIT.record(time.perf_counter() - rl_start)
                 response = await client.post(
                     f"{LLM_SERVER_URL}/v1/inference",
                     json={"prompt": prompt, "max_tokens": max_tokens},
@@ -144,23 +144,20 @@ async def call_llm(
                     data["prompt_tokens"] = data.get("prompt_tokens", 0) + accumulated_tokens
                     outcome = Outcome.SUCCESS
                     duration = time.perf_counter() - started
-                    LLM_REQUESTS_TOTAL.labels(
-                        **labels, outcome=outcome.value
-                    ).inc()
-                    LLM_REQUEST_DURATION.labels(**labels, outcome=outcome.value).observe(duration)
+                    LLM_REQUESTS_TOTAL.add(1, {**labels, "outcome": outcome.value})
+                    LLM_REQUEST_DURATION.record(duration, {**labels, "outcome": outcome.value})
                     prompt_tokens = data.get("prompt_tokens", 0)
                     completion_tokens = data.get("completion_tokens", 0)
-                    LLM_TOKENS_TOTAL.labels(
-                        **labels, token_type="prompt"
-                    ).inc(prompt_tokens)
-                    LLM_TOKENS_TOTAL.labels(
-                        **labels, token_type="completion"
-                    ).inc(completion_tokens)
+                    LLM_TOKENS_TOTAL.add(prompt_tokens, {**labels, "token_type": "prompt"})
+                    LLM_TOKENS_TOTAL.add(completion_tokens, {**labels, "token_type": "completion"})
                     estimated_cost = (
                         (prompt_tokens / 1000) * TOKEN_COST_PER_1K_INPUT
                         + (completion_tokens / 1000) * TOKEN_COST_PER_1K_OUTPUT
                     )
-                    LLM_COST_USD_TOTAL.labels(**labels).inc(estimated_cost)
+                    LLM_COST_USD_TOTAL.add(estimated_cost, labels)
+                    span.set_attribute("llm.prompt_tokens", prompt_tokens)
+                    span.set_attribute("llm.completion_tokens", completion_tokens)
+                    span.set_attribute("llm.estimated_cost_usd", estimated_cost)
                     span.add_event(
                         "llm.attempt",
                         {
@@ -198,10 +195,8 @@ async def call_llm(
                 status_code = "0"
 
             duration = time.perf_counter() - started
-            LLM_REQUESTS_TOTAL.labels(
-                **labels, outcome=outcome.value
-            ).inc()
-            LLM_REQUEST_DURATION.labels(**labels, outcome=outcome.value).observe(duration)
+            LLM_REQUESTS_TOTAL.add(1, {**labels, "outcome": outcome.value})
+            LLM_REQUEST_DURATION.record(duration, {**labels, "outcome": outcome.value})
             span.add_event(
                 "llm.attempt",
                 {
@@ -225,7 +220,7 @@ async def call_llm(
                 jitter = random.uniform(0, delay * 0.3)
                 sleep_for = delay + jitter
                 reason = "timeout" if status_code == "408" else f"status_{status_code}"
-                LLM_RETRIES_TOTAL.labels(**labels, reason=reason).inc()
+                LLM_RETRIES_TOTAL.add(1, {**labels, "reason": reason})
                 span.add_event(
                     "llm.retry_scheduled",
                     {

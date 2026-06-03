@@ -1,226 +1,194 @@
-"""Observability primitives for tracing, metrics, and structured logging."""
+"""Observability: unified OpenTelemetry setup for traces, metrics, and logs."""
 
 from __future__ import annotations
 
-
+import logging
 import os
-from hashlib import blake2b
 import time
 import functools
 import asyncio
+from hashlib import blake2b
 from contextlib import contextmanager
 from typing import Iterator, Callable
 
 import structlog
 
-from opentelemetry import trace
+from opentelemetry import trace, metrics
 from opentelemetry.trace import Status, StatusCode
-from src.models import Outcome, Priority
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest, ProcessCollector, GCCollector, PlatformCollector
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry._logs import set_logger_provider
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+from opentelemetry.exporter.prometheus import PrometheusMetricReader
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
+
+from src.models import Outcome, Priority
 from src.config import METRICS_TENANT_BUCKET_COUNT, METRICS_TENANT_LABEL_MODE
 
-_LOGGING_INITIALIZED = False
-_TRACING_INITIALIZED = False
-
-REGISTRY = CollectorRegistry(auto_describe=True)
-ProcessCollector(registry=REGISTRY)
-GCCollector(registry=REGISTRY)
-PlatformCollector(registry=REGISTRY)
-
-HTTP_REQUESTS_TOTAL = Counter(
-    "agent_http_requests_total",
-    "Total HTTP requests served by the API.",
-    ("method", "path", "status_code"),
-    registry=REGISTRY,
-)
-HTTP_REQUEST_DURATION = Histogram(
-    "agent_http_request_duration_seconds",
-    "HTTP request latency.",
-    ("method", "path", "status_code"),
-    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
-    registry=REGISTRY,
-)
-HTTP_IN_FLIGHT = Gauge(
-    "agent_http_in_flight_requests",
-    "Current number of in-flight HTTP requests.",
-    registry=REGISTRY,
-)
-
-TASKS_TOTAL = Counter(
-    "agent_tasks_total",
-    "Completed task requests by outcome.",
-    ("tenant_id", "priority", "status", "source"),
-    registry=REGISTRY,
-)
-TASK_DURATION = Histogram(
-    "agent_task_duration_seconds",
-    "End-to-end task duration.",
-    ("tenant_id", "priority", "status", "source"),
-    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60),
-    registry=REGISTRY,
-)
-TASK_STAGE_DURATION = Histogram(
-    "agent_task_stage_duration_seconds",
-    "Task pipeline stage duration.",
-    ("tenant_id", "priority", "stage", "outcome"),
-    buckets=(0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
-    registry=REGISTRY,
-)
-TASK_TIMEOUTS_TOTAL = Counter(
-    "agent_task_timeouts_total",
-    "Task timeouts.",
-    ("tenant_id", "priority"),
-    registry=REGISTRY,
-)
-TASK_IN_PROGRESS = Gauge(
-    "agent_task_in_progress",
-    "Tasks currently executing.",
-    ("tenant_id", "priority"),
-    registry=REGISTRY,
-)
-TASK_QUEUE_WAIT = Histogram(
-    "agent_task_queue_wait_seconds",
-    "Time spent waiting on task execution queues.",
-    ("tenant_id", "priority", "queue"),
-    buckets=(0.0005, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
-    registry=REGISTRY,
-)
-
-LLM_REQUESTS_TOTAL = Counter(
-    "agent_llm_requests_total",
-    "LLM request attempts.",
-    ("tenant_id", "priority", "operation", "outcome"),
-    registry=REGISTRY,
-)
-LLM_REQUEST_DURATION = Histogram(
-    "agent_llm_request_duration_seconds",
-    "LLM request latency.",
-    ("tenant_id", "priority", "operation", "outcome"),
-    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
-    registry=REGISTRY,
-)
-LLM_RETRIES_TOTAL = Counter(
-    "agent_llm_retries_total",
-    "LLM retry attempts.",
-    ("tenant_id", "priority", "operation", "reason"),
-    registry=REGISTRY,
-)
-LLM_TOKENS_TOTAL = Counter(
-    "agent_llm_tokens_total",
-    "LLM token usage.",
-    ("tenant_id", "priority", "operation", "token_type"),
-    registry=REGISTRY,
-)
-LLM_COST_USD_TOTAL = Counter(
-    "agent_llm_estimated_cost_usd_total",
-    "Estimated LLM cost in USD.",
-    ("tenant_id", "priority", "operation"),
-    registry=REGISTRY,
-)
-LLM_RATE_LIMIT_WAIT = Histogram(
-    "agent_llm_rate_limit_wait_seconds",
-    "Time spent waiting on the LLM rate limiter.",
-    buckets=(0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
-    registry=REGISTRY,
-)
-
-TOOL_CALLS_TOTAL = Counter(
-    "agent_tool_calls_total",
-    "Tool call attempts.",
-    ("tenant_id", "priority", "tool_name", "outcome"),
-    registry=REGISTRY,
-)
-TOOL_CALL_DURATION = Histogram(
-    "agent_tool_call_duration_seconds",
-    "Tool call latency.",
-    ("tenant_id", "priority", "tool_name", "outcome"),
-    buckets=(0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
-    registry=REGISTRY,
-)
-
-CACHE_OPERATIONS_TOTAL = Counter(
-    "agent_cache_operations_total",
-    "Cache lookups by result.",
-    ("result",),
-    registry=REGISTRY,
-)
-CACHE_ENTRIES = Gauge(
-    "agent_cache_entries",
-    "Current number of entries in the response cache.",
-    registry=REGISTRY,
-)
+_INITIALIZED = False
 
 
-def setup_logging() -> None:
-    """Configure root logging once with JSON output using structlog."""
-    global _LOGGING_INITIALIZED
-    if _LOGGING_INITIALIZED:
+# ── Resource (shared by all signals) ──────────────────────────
+def _build_resource() -> Resource:
+    return Resource.create(
+        {
+            SERVICE_NAME: os.getenv("OTEL_SERVICE_NAME", "agent-service"),
+            "service.version": os.getenv("SERVICE_VERSION", "dev"),
+            "deployment.environment": os.getenv("DEPLOYMENT_ENV", "development"),
+        }
+    )
+
+
+# ── Init (one function, all three signals) ────────────────────
+def init_observability() -> None:
+    """Initialize tracing, metrics, and logging. Call once at startup."""
+    global _INITIALIZED
+    if _INITIALIZED:
         return
 
+    resource = _build_resource()
+    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+
+    # 1. Tracing
+    tracer_provider = TracerProvider(resource=resource)
+    if endpoint:
+        tracer_provider.add_span_processor(
+            BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint))
+        )
+    trace.set_tracer_provider(tracer_provider)
+
+    # 2. Metrics (Push to OTLP + Expose for Prometheus)
+    readers = [PrometheusMetricReader()]
+    if endpoint:
+        readers.append(
+            PeriodicExportingMetricReader(
+                OTLPMetricExporter(endpoint=endpoint),
+                export_interval_millis=5000,
+            )
+        )
+    meter_provider = MeterProvider(resource=resource, metric_readers=readers)
+    metrics.set_meter_provider(meter_provider)
+
+    # 3. Logging (structlog → stdlib → OTEL handler → Loki)
+    _setup_logging(resource, endpoint)
+
+    # 4. Auto-instrumentation
+    HTTPXClientInstrumentor().instrument()
+
+    _INITIALIZED = True
+
+
+# ── Structured logging setup ──────────────────────────────────
+def _setup_logging(resource: Resource, endpoint: str | None) -> None:
+    """Configure structlog + OTEL log bridge."""
+    # OTEL log provider → sends logs to Collector → Loki
+    log_provider = LoggerProvider(resource=resource)
+    if endpoint:
+        log_provider.add_log_record_processor(
+            BatchLogRecordProcessor(OTLPLogExporter(endpoint=endpoint))
+        )
+    set_logger_provider(log_provider)
+
+    # Bridge: stdlib logging → OTEL
+    otel_handler = LoggingHandler(logger_provider=log_provider)
+    root = logging.getLogger()
+    root.addHandler(otel_handler)
+    root.setLevel(getattr(logging, os.getenv("LOG_LEVEL", "INFO")))
+
+    # structlog → stdlib (so logs flow through the OTEL handler)
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
-            structlog.processors.add_log_level,
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.add_logger_name,
             structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.JSONRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
-        logger_factory=structlog.PrintLoggerFactory(),
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
 
-    _LOGGING_INITIALIZED = True
-
-
-def _parse_otlp_headers(value: str) -> dict[str, str]:
-    """Parse OTLP headers from comma-separated key=value pairs."""
-    if not value.strip():
-        return {}
-
-    headers: dict[str, str] = {}
-    for item in value.split(","):
-        item = item.strip()
-        if not item:
-            continue
-
-        key, separator, raw_value = item.partition("=")
-        if not separator:
-            continue
-
-        headers[key.strip()] = raw_value.strip()
-    return headers
-
-
-def setup_tracing() -> None:
-    """Initialize tracing with optional OTLP export."""
-    global _TRACING_INITIALIZED
-    if _TRACING_INITIALIZED:
-        return
-
-    resource = Resource.create(
-        {SERVICE_NAME: os.getenv("OTEL_SERVICE_NAME", "agent-service")}
+    # Formatter for console output (also JSON, also goes to OTEL)
+    formatter = structlog.stdlib.ProcessorFormatter(
+        processors=[structlog.processors.JSONRenderer()],
     )
-    provider = TracerProvider(resource=resource)
-
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-    if endpoint:
-        exporter = OTLPSpanExporter(
-            endpoint=endpoint,
-            headers=_parse_otlp_headers(os.getenv("OTEL_EXPORTER_OTLP_HEADERS", "")),
-        )
-        provider.add_span_processor(BatchSpanProcessor(exporter))
-
-    trace.set_tracer_provider(provider)
-    _TRACING_INITIALIZED = True
+    console = logging.StreamHandler()
+    console.setFormatter(formatter)
+    root.addHandler(console)
 
 
-def init_observability() -> None:
-    """Initialize logging and tracing."""
-    setup_logging()
-    setup_tracing()
+_meter = metrics.get_meter("agent-platform")
+
+
+# Task
+TASKS_TOTAL = _meter.create_counter(
+    "agent.tasks", unit="1", description="Completed tasks by outcome"
+)
+TASK_DURATION = _meter.create_histogram(
+    "agent.task.duration", unit="s", description="End-to-end task duration"
+)
+TASK_STAGE_DURATION = _meter.create_histogram(
+    "agent.task.stage.duration", unit="s", description="Pipeline stage duration"
+)
+TASK_TIMEOUTS_TOTAL = _meter.create_counter(
+    "agent.task.timeouts", unit="1", description="Task timeouts"
+)
+TASK_IN_PROGRESS = _meter.create_up_down_counter(
+    "agent.task.in_progress", unit="1", description="Tasks currently executing"
+)
+TASK_QUEUE_WAIT = _meter.create_histogram(
+    "agent.task.queue.wait", unit="s", description="Queue wait time"
+)
+
+# LLM
+LLM_REQUESTS_TOTAL = _meter.create_counter(
+    "agent.llm.requests", unit="1", description="LLM request attempts"
+)
+LLM_REQUEST_DURATION = _meter.create_histogram(
+    "agent.llm.request.duration", unit="s", description="LLM request latency"
+)
+LLM_RETRIES_TOTAL = _meter.create_counter(
+    "agent.llm.retries", unit="1", description="LLM retry attempts"
+)
+LLM_TOKENS_TOTAL = _meter.create_counter(
+    "agent.llm.tokens", unit="1", description="LLM token usage"
+)
+LLM_COST_USD_TOTAL = _meter.create_counter(
+    "agent.llm.cost.usd", unit="USD", description="Estimated LLM cost"
+)
+LLM_RATE_LIMIT_WAIT = _meter.create_histogram(
+    "agent.llm.rate_limit.wait", unit="s", description="Rate limiter wait time"
+)
+
+# Tool
+TOOL_CALLS_TOTAL = _meter.create_counter(
+    "agent.tool.calls", unit="1", description="Tool call attempts"
+)
+TOOL_CALL_DURATION = _meter.create_histogram(
+    "agent.tool.call.duration", unit="s", description="Tool call latency"
+)
+
+# Cache
+CACHE_OPERATIONS_TOTAL = _meter.create_counter(
+    "agent.cache.operations", unit="1", description="Cache lookups"
+)
+CACHE_ENTRIES = _meter.create_up_down_counter(
+    "agent.cache.entries", unit="1", description="Current cache entries"
+)
+
+
+# ── Helpers (public API stays similar) ────────────────────────
 
 
 def render_metrics() -> tuple[bytes, str]:
@@ -228,59 +196,44 @@ def render_metrics() -> tuple[bytes, str]:
     return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
 
 
-def metric_tenant_label(tenant_id: str) -> str:
-    """Return a bounded-cardinality tenant label for metrics."""
-    if METRICS_TENANT_LABEL_MODE == "direct":
-        return tenant_id
-
-    if METRICS_TENANT_BUCKET_COUNT <= 0:
-        return "bucket-0"
-
-    digest = blake2b(tenant_id.encode("utf-8"), digest_size=4).hexdigest()
-    bucket = int(digest, 16) % METRICS_TENANT_BUCKET_COUNT
-    return f"bucket-{bucket:02d}"
-
-
 def get_tracer():
-    """Get the application tracer."""
     return trace.get_tracer("agent-platform")
 
 
 def current_trace_id() -> str:
-    """Return the current trace ID in W3C hex format."""
-    span_context = trace.get_current_span().get_span_context()
-    if not span_context.is_valid:
-        return ""
-    return format(span_context.trace_id, "032x")
+    ctx = trace.get_current_span().get_span_context()
+    return format(ctx.trace_id, "032x") if ctx.is_valid else ""
 
 
 def current_span_id() -> str:
-    """Return the current span ID in W3C hex format."""
-    span_context = trace.get_current_span().get_span_context()
-    if not span_context.is_valid:
-        return ""
-    return format(span_context.span_id, "016x")
+    ctx = trace.get_current_span().get_span_context()
+    return format(ctx.span_id, "016x") if ctx.is_valid else ""
+
+
+def metric_tenant_label(tenant_id: str) -> str:
+    if METRICS_TENANT_LABEL_MODE == "direct":
+        return tenant_id
+    if METRICS_TENANT_BUCKET_COUNT <= 0:
+        return "bucket-0"
+    digest = blake2b(tenant_id.encode(), digest_size=4).hexdigest()
+    return f"bucket-{int(digest, 16) % METRICS_TENANT_BUCKET_COUNT:02d}"
 
 
 @contextmanager
 def bind_context(**values: str) -> Iterator[None]:
-    """Bind request context to logs within the current execution flow."""
-    # Only bind non-None values
-    bound_values = {k: str(v) for k, v in values.items() if v is not None}
-    with structlog.contextvars.bound_contextvars(**bound_values):
+    bound = {k: str(v) for k, v in values.items() if v is not None}
+    with structlog.contextvars.bound_contextvars(**bound):
         yield
 
 
 def update_trace_context() -> None:
-    """Refresh trace and span IDs from the active span."""
     structlog.contextvars.bind_contextvars(
         trace_id=current_trace_id(),
-        span_id=current_span_id()
+        span_id=current_span_id(),
     )
 
 
 class StageState:
-    """State object for stage observability context."""
     def __init__(self):
         self.outcome = Outcome.SUCCESS
         self.error: Exception | str | None = None
@@ -291,12 +244,14 @@ class StageState:
 
 
 @contextmanager
-def observe_stage(stage_name: str, tenant_id: str, priority: Priority) -> Iterator[StageState]:
-    """Context manager for tracing and metrics of a pipeline stage."""
+def observe_stage(
+    stage_name: str, tenant_id: str, priority: Priority
+) -> Iterator[StageState]:
     tracer = get_tracer()
-    metric_tenant = metric_tenant_label(tenant_id)
+    mt = metric_tenant_label(tenant_id)
     state = StageState()
-    
+    attrs = {"tenant_id": mt, "priority": priority.value, "stage": stage_name}
+
     with tracer.start_as_current_span(f"task.{stage_name}") as span, bind_context(
         stage=stage_name, operation=stage_name
     ):
@@ -304,86 +259,75 @@ def observe_stage(stage_name: str, tenant_id: str, priority: Priority) -> Iterat
         try:
             yield state
             if state.error:
-                span.set_status(Status(StatusCode.ERROR, description=str(state.error)))
+                span.set_status(Status(StatusCode.ERROR, str(state.error)))
         except Exception as e:
             state.outcome = Outcome.FAILURE
-            span.set_status(Status(StatusCode.ERROR, description=str(e)))
-            structlog.get_logger(__name__).exception("stage.exception", stage=stage_name)
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            structlog.get_logger(__name__).exception(
+                "stage.exception", stage=stage_name
+            )
             raise
         finally:
-            duration = time.perf_counter() - started
-            TASK_STAGE_DURATION.labels(
-                tenant_id=metric_tenant,
-                priority=priority.value,
-                stage=stage_name,
-                outcome=state.outcome.value,
-            ).observe(duration)
-            
-            logger = structlog.get_logger(__name__)
+            dur = time.perf_counter() - started
+            TASK_STAGE_DURATION.record(dur, {**attrs, "outcome": state.outcome.value})
+            log = structlog.get_logger(__name__)
             if state.outcome == Outcome.SUCCESS:
-                logger.info(
+                log.info(
                     "stage.completed",
                     stage=stage_name,
                     outcome=state.outcome.value,
-                    duration_ms=round(duration * 1000, 2),
+                    duration_ms=round(dur * 1000, 2),
                 )
             elif state.error:
-                # If there was an exception, we already logged it in except block.
-                # If error was set but no exception was raised, log error here.
-                logger.error(
+                log.error(
                     "stage.failed",
                     stage=stage_name,
                     outcome=state.outcome.value,
-                    duration_ms=round(duration * 1000, 2),
+                    duration_ms=round(dur * 1000, 2),
                     error=str(state.error),
                 )
 
 
 def observe_tool(func: Callable) -> Callable:
-    """Decorator to trace and monitor tool execution."""
     @functools.wraps(func)
-    async def wrapper(tool_name: str, args: dict, *, tenant_id: str, priority: Priority) -> dict:
+    async def wrapper(
+        tool_name: str, args: dict, *, tenant_id: str, priority: Priority
+    ) -> dict:
         tracer = get_tracer()
-        metric_tenant = metric_tenant_label(tenant_id)
-        
+        mt = metric_tenant_label(tenant_id)
+        attrs = {"tenant_id": mt, "priority": priority.value, "tool_name": tool_name}
+
         with tracer.start_as_current_span(f"tool.{tool_name}") as span, bind_context(
             operation=tool_name
         ):
             started = time.perf_counter()
             outcome = Outcome.UNKNOWN
-            logger = structlog.get_logger(__name__)
+            log = structlog.get_logger(__name__)
             try:
-                result = await func(tool_name, args, tenant_id=tenant_id, priority=priority)
+                result = await func(
+                    tool_name, args, tenant_id=tenant_id, priority=priority
+                )
                 outcome = Outcome.SUCCESS
                 return result
             except asyncio.CancelledError:
                 outcome = Outcome.CANCELLED
-                span.set_status(Status(StatusCode.ERROR, description="cancelled"))
-                logger.warning("tool.cancelled", tool_name=tool_name)
+                span.set_status(Status(StatusCode.ERROR, "cancelled"))
+                log.warning("tool.cancelled", tool_name=tool_name)
                 raise
             except Exception as e:
                 outcome = Outcome.FAILURE
-                span.set_status(Status(StatusCode.ERROR, description=str(e)))
-                logger.exception("tool.exception", tool_name=tool_name)
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+                log.exception("tool.exception", tool_name=tool_name)
                 raise
             finally:
-                duration = time.perf_counter() - started
-                TOOL_CALLS_TOTAL.labels(
-                    tenant_id=metric_tenant,
-                    priority=priority.value,
-                    tool_name=tool_name,
-                    outcome=outcome.value,
-                ).inc()
-                TOOL_CALL_DURATION.labels(
-                    tenant_id=metric_tenant,
-                    priority=priority.value,
-                    tool_name=tool_name,
-                    outcome=outcome.value,
-                ).observe(duration)
-                logger.info(
+                dur = time.perf_counter() - started
+                TOOL_CALLS_TOTAL.add(1, {**attrs, "outcome": outcome.value})
+                TOOL_CALL_DURATION.record(dur, {**attrs, "outcome": outcome.value})
+                log.info(
                     "tool.completed",
                     tool_name=tool_name,
                     outcome=outcome.value,
-                    duration_ms=round(duration * 1000, 2),
+                    duration_ms=round(dur * 1000, 2),
                 )
+
     return wrapper

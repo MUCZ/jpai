@@ -9,8 +9,8 @@ from time import perf_counter
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
-from opentelemetry import propagate, trace
-from opentelemetry.trace import SpanKind, Status, StatusCode
+from opentelemetry import trace
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import BaseModel
 from typing import Optional
 from src.models import Priority, TaskStatus, TaskResult
@@ -24,9 +24,6 @@ from src.config import (
 from src.observability import (
     CACHE_ENTRIES,
     CACHE_OPERATIONS_TOTAL,
-    HTTP_IN_FLIGHT,
-    HTTP_REQUEST_DURATION,
-    HTTP_REQUESTS_TOTAL,
     TASK_DURATION,
     TASK_IN_PROGRESS,
     TASK_QUEUE_WAIT,
@@ -91,105 +88,85 @@ _QUIET_PATHS = frozenset({"/health", "/metrics"})
 def _cache_get(cache_key: str) -> Optional[dict]:
     cached = _response_cache.get(cache_key)
     if cached is None:
-        CACHE_OPERATIONS_TOTAL.labels(result="miss").inc()
+        CACHE_OPERATIONS_TOTAL.add(1, {"result": "miss"})
         return None
 
     if time.time() - cached["cached_at"] > RESPONSE_CACHE_TTL_SECONDS:
         _response_cache.pop(cache_key, None)
-        CACHE_ENTRIES.set(len(_response_cache))
-        CACHE_OPERATIONS_TOTAL.labels(result="expired").inc()
+        CACHE_ENTRIES.add(-1)
+        CACHE_OPERATIONS_TOTAL.add(1, {"result": "expired"})
         return None
 
     _response_cache.move_to_end(cache_key)
-    CACHE_OPERATIONS_TOTAL.labels(result="hit").inc()
+    CACHE_OPERATIONS_TOTAL.add(1, {"result": "hit"})
     return cached
 
 
 def _cache_set(cache_key: str, result: str) -> None:
+    if cache_key not in _response_cache:
+        CACHE_ENTRIES.add(1)
     _response_cache[cache_key] = {"result": result, "cached_at": time.time()}
     _response_cache.move_to_end(cache_key)
     while len(_response_cache) > RESPONSE_CACHE_MAX_ENTRIES:
         _response_cache.popitem(last=False)
-    CACHE_ENTRIES.set(len(_response_cache))
+        CACHE_ENTRIES.add(-1)
 
 
 def _record_task_metrics(
-    tenant: str, priority: str, status: str, source: str, duration: float,
+    tenant: str,
+    priority: str,
+    status: str,
+    source: str,
+    duration: float,
 ) -> None:
     """Bundle the counter + histogram updates that every task completion emits."""
-    TASKS_TOTAL.labels(tenant_id=tenant, priority=priority, status=status, source=source).inc()
-    TASK_DURATION.labels(tenant_id=tenant, priority=priority, status=status, source=source).observe(duration)
+    attrs = {
+        "tenant_id": tenant,
+        "priority": priority,
+        "status": status,
+        "source": source,
+    }
+    TASKS_TOTAL.add(1, attrs)
+    TASK_DURATION.record(duration, attrs)
 
 
 @app.middleware("http")
-async def observe_requests(request: Request, call_next):
+async def inject_trace_id_and_log(request: Request, call_next):
+    """Log requests and inject X-Trace-Id header into response.
+
+    Metrics and tracing are handled by FastAPIInstrumentor.
+    """
     method = request.method
     start = perf_counter()
-    HTTP_IN_FLIGHT.inc()
-
-    with tracer.start_as_current_span(
-        f"{method} {request.url.path}",
-        context=propagate.extract(request.headers),
-        kind=SpanKind.SERVER,
-    ) as span:
-        update_trace_context()
-        span.set_attribute("http.method", method)
-        span.set_attribute("http.target", request.url.path)
-
-        logger.debug(
-            "request.started",
-            path=request.url.path,
+    trace_id = current_trace_id()
+    path = _route_label(request)
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        duration = perf_counter() - start
+        logger.exception(
+            "request.failed",
+            path=path,
             method=method,
+            duration_ms=round(duration * 1000, 2),
         )
-
-        try:
-            response = await call_next(request)
-        except Exception as exc:
-            duration = perf_counter() - start
-            path = _route_label(request)
-            span.set_attribute("http.route", path)
-            span.record_exception(exc)
-            span.set_status(Status(StatusCode.ERROR))
-            HTTP_REQUESTS_TOTAL.labels(method=method, path=path, status_code="500").inc()
-            HTTP_REQUEST_DURATION.labels(
-                method=method, path=path, status_code="500"
-            ).observe(duration)
-            logger.exception(
-                "request.failed",
+        response = JSONResponse(
+            status_code=500,
+            content={"detail": "Internal Server Error"},
+        )
+    else:
+        duration = perf_counter() - start
+        if path not in _QUIET_PATHS:
+            logger.info(
+                "request.completed",
                 path=path,
                 method=method,
+                status_code=response.status_code,
                 duration_ms=round(duration * 1000, 2),
             )
-            response = JSONResponse(
-                status_code=500,
-                content={"detail": "Internal Server Error"},
-            )
-        else:
-            duration = perf_counter() - start
-            path = _route_label(request)
-            span.set_attribute("http.route", path)
-            status_code = str(response.status_code)
-            if response.status_code >= 500:
-                span.set_status(Status(StatusCode.ERROR))
-            HTTP_REQUESTS_TOTAL.labels(
-                method=method, path=path, status_code=status_code
-            ).inc()
-            HTTP_REQUEST_DURATION.labels(
-                method=method, path=path, status_code=status_code
-            ).observe(duration)
-            if path not in _QUIET_PATHS:
-                logger.info(
-                    "request.completed",
-                    path=path,
-                    method=method,
-                    status_code=response.status_code,
-                    duration_ms=round(duration * 1000, 2),
-                )
-        finally:
-            HTTP_IN_FLIGHT.dec()
 
-        response.headers["X-Trace-Id"] = current_trace_id()
-        return response
+    response.headers["X-Trace-Id"] = trace_id
+    return response
 
 
 @app.post("/tasks", response_model=TaskResponse)
@@ -228,8 +205,10 @@ async def create_task(body: CreateTaskBody):
             task_store[task_id] = result
             span.add_event("task.cache_hit")
             _record_task_metrics(
-                metric_tenant, body.priority.value,
-                result.status.value, "cache",
+                metric_tenant,
+                body.priority.value,
+                result.status.value,
+                "cache",
                 max(result.completed_at - result.created_at, 0.0),
             )
             logger.info(
@@ -253,11 +232,14 @@ async def create_task(body: CreateTaskBody):
             with tracer.start_as_current_span("task.wait_tenant_lock"):
                 await lock.acquire()
             tenant_wait = perf_counter() - tenant_wait_started
-            TASK_QUEUE_WAIT.labels(
-                tenant_id=metric_tenant,
-                priority=body.priority.value,
-                queue="tenant_lock",
-            ).observe(tenant_wait)
+            TASK_QUEUE_WAIT.record(
+                tenant_wait,
+                {
+                    "tenant_id": metric_tenant,
+                    "priority": body.priority.value,
+                    "queue": "tenant_lock",
+                },
+            )
             logger.debug(
                 "task.lock_acquired",
                 queue="tenant_lock",
@@ -269,11 +251,14 @@ async def create_task(body: CreateTaskBody):
                 with tracer.start_as_current_span("task.wait_global_concurrency"):
                     await _task_semaphore.acquire()
                 semaphore_wait = perf_counter() - semaphore_wait_started
-                TASK_QUEUE_WAIT.labels(
-                    tenant_id=metric_tenant,
-                    priority=body.priority.value,
-                    queue="global_concurrency",
-                ).observe(semaphore_wait)
+                TASK_QUEUE_WAIT.record(
+                    semaphore_wait,
+                    {
+                        "tenant_id": metric_tenant,
+                        "priority": body.priority.value,
+                        "queue": "global_concurrency",
+                    },
+                )
                 logger.debug(
                     "task.concurrency_acquired",
                     queue="global_concurrency",
@@ -293,9 +278,9 @@ async def create_task(body: CreateTaskBody):
             finally:
                 lock.release()
 
-        TASK_IN_PROGRESS.labels(
-            tenant_id=metric_tenant, priority=body.priority.value
-        ).inc()
+        TASK_IN_PROGRESS.add(
+            1, {"tenant_id": metric_tenant, "priority": body.priority.value}
+        )
         try:
             result = await asyncio.wait_for(
                 _guarded_execute(), timeout=TASK_TIMEOUT_SECONDS
@@ -312,24 +297,26 @@ async def create_task(body: CreateTaskBody):
                 created_at=time.time(),
                 completed_at=time.time(),
             )
-            TASK_TIMEOUTS_TOTAL.labels(
-                tenant_id=metric_tenant, priority=body.priority.value
-            ).inc()
+            TASK_TIMEOUTS_TOTAL.add(
+                1, {"tenant_id": metric_tenant, "priority": body.priority.value}
+            )
             logger.warning(
                 "task.timeout",
                 timeout_seconds=TASK_TIMEOUT_SECONDS,
                 task_description=body.task_description[:200],
             )
         finally:
-            TASK_IN_PROGRESS.labels(
-                tenant_id=metric_tenant, priority=body.priority.value
-            ).dec()
+            TASK_IN_PROGRESS.add(
+                -1, {"tenant_id": metric_tenant, "priority": body.priority.value}
+            )
 
         task_store[task_id] = result
         source = "fresh"
         _record_task_metrics(
-            metric_tenant, body.priority.value,
-            result.status.value, source,
+            metric_tenant,
+            body.priority.value,
+            result.status.value,
+            source,
             max(result.completed_at - result.created_at, 0.0),
         )
 
@@ -372,9 +359,25 @@ async def metrics():
 
 def _to_response(r: TaskResult) -> TaskResponse:
     return TaskResponse(
-        task_id=r.task_id, status=r.status,
-        tenant_id=r.tenant_id, priority=r.priority,
-        result=r.result, error=r.error,
+        task_id=r.task_id,
+        status=r.status,
+        tenant_id=r.tenant_id,
+        priority=r.priority,
+        result=r.result,
+        error=r.error,
         token_usage=r.token_usage,
-        created_at=r.created_at, completed_at=r.completed_at,
+        created_at=r.created_at,
+        completed_at=r.completed_at,
     )
+
+
+def _server_request_hook(span, scope):
+    """Bind trace/span IDs into structlog context on each request."""
+    update_trace_context()
+
+
+FastAPIInstrumentor.instrument_app(
+    app,
+    server_request_hook=_server_request_hook,
+    excluded_urls="health,metrics",
+)
