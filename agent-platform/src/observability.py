@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import logging
+
 import os
 from hashlib import blake2b
 import time
 import functools
 import asyncio
 from contextlib import contextmanager
-from typing import Iterator, Callable, Any
+from typing import Iterator, Callable
 
 import structlog
 
@@ -19,7 +19,6 @@ from src.models import Outcome, Priority
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 from src.config import METRICS_TENANT_BUCKET_COUNT, METRICS_TENANT_LABEL_MODE
@@ -162,21 +161,34 @@ def setup_logging() -> None:
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.add_logger_name,
-            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.JSONRenderer(),
         ],
-        wrapper_class=structlog.stdlib.BoundLogger,
-        logger_factory=structlog.stdlib.LoggerFactory(),
+        logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )
-    
-    # Configure the standard library logging to output structured logs
-    logging.basicConfig(format="%(message)s", level=logging.INFO)
 
     _LOGGING_INITIALIZED = True
+
+
+def _parse_otlp_headers(value: str) -> dict[str, str]:
+    """Parse OTLP headers from comma-separated key=value pairs."""
+    if not value.strip():
+        return {}
+
+    headers: dict[str, str] = {}
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+
+        key, separator, raw_value = item.partition("=")
+        if not separator:
+            continue
+
+        headers[key.strip()] = raw_value.strip()
+    return headers
 
 
 def setup_tracing() -> None:

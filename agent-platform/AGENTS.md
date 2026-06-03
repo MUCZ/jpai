@@ -10,7 +10,7 @@ Use Docker for the standard local setup:
 docker compose up --build
 ```
 
-This starts the API on `localhost:8080` and the mock LLM on `localhost:8081`.
+This starts the API on `localhost:8080`, the mock LLM on `localhost:8081`, Prometheus on `localhost:9090`, Grafana on `localhost:3000`, and Jaeger on `localhost:16686`. The API container waits for Jaeger to report healthy before it starts exporting traces.
 
 Smoke-check the service:
 
@@ -39,6 +39,9 @@ Follow standard Python style: 4-space indentation, `snake_case` for functions an
 Focused tests live under `tests/` using `test_*.py` naming. For behavior changes, verify `/health`, one successful `POST /tasks`, and failure paths involving the mock LLM.
 
 Run the observability/unit test suite in Docker so the environment matches the repo's Python 3.12 container:
+
+To verify traces locally after the stack is up, send a `POST /tasks` request, capture the `X-Trace-Id` response header, and inspect service `agent-service` in Jaeger at `http://localhost:16686`.
+
 
 ```bash
 docker compose run --build --rm agent-service python -m unittest tests.test_observability
