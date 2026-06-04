@@ -18,8 +18,4 @@ storage:
   tsdb:
     out_of_order_time_window: 10m
 
-scrape_configs:
-  - job_name: 'agent-service'
-    scrape_interval: 5s
-    static_configs:
-      - targets: ['agent-service:8080']
+
