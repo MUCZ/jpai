@@ -10,6 +10,7 @@ from time import perf_counter
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from opentelemetry import trace
+from opentelemetry.trace import StatusCode
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import BaseModel
 from typing import Optional
@@ -168,6 +169,7 @@ async def inject_trace_id_and_log(request: Request, call_next):
 async def create_task(body: CreateTaskBody):
     task_id = str(uuid.uuid4())
     request_started = perf_counter()
+    task_created_at = time.time()
 
     # Cache key: tenant + description (priority excluded because
     # task results are priority-independent in the current design)
@@ -261,26 +263,32 @@ async def create_task(body: CreateTaskBody):
                 )
 
                 try:
+                    TASK_IN_PROGRESS.add(
+                        1, {"tenant_id": metric_tenant, "priority": body.priority.value}
+                    )
                     task_store[task_id].status = TaskStatus.RUNNING
                     return await run_task(
                         task_id=task_id,
                         description=body.task_description,
                         tenant_id=body.tenant_id,
                         priority=body.priority,
+                        created_at=task_created_at,
                     )
                 finally:
+                    TASK_IN_PROGRESS.add(
+                        -1, {"tenant_id": metric_tenant, "priority": body.priority.value}
+                    )
                     _task_semaphore.release()
             finally:
                 lock.release()
 
-        TASK_IN_PROGRESS.add(
-            1, {"tenant_id": metric_tenant, "priority": body.priority.value}
-        )
         try:
             result = await asyncio.wait_for(
                 _guarded_execute(), timeout=TASK_TIMEOUT_SECONDS
             )
         except asyncio.TimeoutError:
+            span.set_status(StatusCode.ERROR, "Task execution exceeded time limit")
+            span.record_exception(asyncio.TimeoutError("Task execution exceeded time limit"))
             span.add_event("task.timeout")
             result = TaskResult(
                 task_id=task_id,
@@ -289,7 +297,7 @@ async def create_task(body: CreateTaskBody):
                 priority=body.priority,
                 error="Task execution exceeded time limit",
                 token_usage={"prompt_tokens": 0, "completion_tokens": 0},
-                created_at=time.time(),
+                created_at=task_created_at,
                 completed_at=time.time(),
             )
             TASK_TIMEOUTS_TOTAL.add(
@@ -300,10 +308,6 @@ async def create_task(body: CreateTaskBody):
                 timeout_seconds=TASK_TIMEOUT_SECONDS,
                 task_description=body.task_description[:200],
             )
-        finally:
-            TASK_IN_PROGRESS.add(
-                -1, {"tenant_id": metric_tenant, "priority": body.priority.value}
-            )
 
         task_store[task_id] = result
         source = "fresh"
@@ -312,7 +316,7 @@ async def create_task(body: CreateTaskBody):
             body.priority.value,
             result.status.value,
             source,
-            max(result.completed_at - result.created_at, 0.0),
+            max(perf_counter() - request_started, 0.0),
         )
 
         if result.status == TaskStatus.COMPLETED:
