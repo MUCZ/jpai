@@ -422,8 +422,8 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "rate(agent_task_queue_wait_seconds_sum[1m]) / rate(agent_task_queue_wait_seconds_count[1m])",
-                        "legendFormat": "__auto",
+                        "expr": "sum(rate(agent_task_queue_wait_seconds_sum[1m])) by (priority, queue) / sum(rate(agent_task_queue_wait_seconds_count[1m])) by (priority, queue)",
+                        "legendFormat": "{{priority}} - {{queue}}",
                         "range": true
                       }
                     },
