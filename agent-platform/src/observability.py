@@ -76,7 +76,23 @@ def init_observability() -> None:
                 export_interval_millis=5000,
             )
         )
-    meter_provider = MeterProvider(resource=resource, metric_readers=readers)
+        
+    from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
+    # User requested buckets: [0.1, 0.5, 1, 2, 5, 10, 20, 30, 45]
+    # Because http.server.duration is recorded in milliseconds by default, 
+    # we convert these seconds into milliseconds.
+    http_duration_view = View(
+        instrument_name="http.server.duration",
+        aggregation=ExplicitBucketHistogramAggregation(
+            boundaries=(100.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0, 30000.0, 45000.0)
+        ),
+    )
+    
+    meter_provider = MeterProvider(
+        resource=resource, 
+        metric_readers=readers,
+        views=[http_duration_view]
+    )
     metrics.set_meter_provider(meter_provider)
 
     # 3. Logging (structlog → stdlib → OTEL handler → Loki)

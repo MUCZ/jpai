@@ -13,10 +13,10 @@ run multiple rounds.
 import asyncio, httpx, random, time, sys
 
 BASE_URL = "http://localhost:8080"
-TENANTS = ["tenant-alpha", "tenant-beta", "tenant-gamma"]
+TENANTS = ["tenant-alpha", "tenant-beta", "tenant-gamma", "tenant-delta", "tenant-epsilon", "tenant-zeta", "tenant-eta", "tenant-theta", "tenant-iota", "tenant-kappa"]
 PRIORITIES = ["urgent", "normal", "low"]
-TOTAL_REQUESTS = 100
-CONCURRENCY = 15
+TOTAL_REQUESTS = 1000
+CONCURRENCY = 30
 
 TASK_TEMPLATES = [
     "Analyse quarterly revenue report for {tenant}",
