@@ -81,10 +81,6 @@ def _route_label(request: Request) -> str:
     return getattr(route, "path_format", request.url.path)
 
 
-# Paths exempt from INFO-level request logs (probes, metrics scrapes)
-_QUIET_PATHS = frozenset({"/health", "/metrics"})
-
-
 def _cache_get(cache_key: str) -> Optional[dict]:
     cached = _response_cache.get(cache_key)
     if cached is None:
@@ -156,14 +152,13 @@ async def inject_trace_id_and_log(request: Request, call_next):
         )
     else:
         duration = perf_counter() - start
-        if path not in _QUIET_PATHS:
-            logger.info(
-                "request.completed",
-                path=path,
-                method=method,
-                status_code=response.status_code,
-                duration_ms=round(duration * 1000, 2),
-            )
+        logger.info(
+            "request.completed",
+            path=path,
+            method=method,
+            status_code=response.status_code,
+            duration_ms=round(duration * 1000, 2),
+        )
 
     response.headers["X-Trace-Id"] = trace_id
     return response
