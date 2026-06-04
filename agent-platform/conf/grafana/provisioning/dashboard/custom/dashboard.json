@@ -403,7 +403,7 @@
         "kind": "Panel",
         "spec": {
           "id": 12,
-          "title": "Average Queue Wait Time (Blocked Tasks)",
+          "title": "Average Queue Wait Time - Global Concurrency",
           "description": "",
           "links": [],
           "data": {
@@ -422,8 +422,8 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "sum(rate(agent_task_queue_wait_seconds_sum[1m])) by (priority, queue) / sum(rate(agent_task_queue_wait_seconds_count[1m])) by (priority, queue)",
-                        "legendFormat": "{{priority}} - {{queue}}",
+                        "expr": "sum(rate(agent_task_queue_wait_seconds_sum{queue=\"global_concurrency\"}[1m])) by (priority) / sum(rate(agent_task_queue_wait_seconds_count{queue=\"global_concurrency\"}[1m])) by (priority)",
+                        "legendFormat": "{{priority}}",
                         "range": true
                       }
                     },
@@ -2825,6 +2825,124 @@
             }
           }
         }
+      },
+      "panel-26": {
+        "kind": "Panel",
+        "spec": {
+          "id": 26,
+          "title": "Average Queue Wait Time - Tenant Lock",
+          "description": "",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "prometheus"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "sum(rate(agent_task_queue_wait_seconds_sum{queue=\"tenant_lock\"}[1m])) by (priority) / sum(rate(agent_task_queue_wait_seconds_count{queue=\"tenant_lock\"}[1m])) by (priority)",
+                        "legendFormat": "{{priority}}",
+                        "range": true
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.0.1",
+            "spec": {
+              "options": {
+                "annotations": {
+                  "clustering": -1,
+                  "multiLane": false
+                },
+                "legend": {
+                  "calcs": [],
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "hideZeros": false,
+                  "mode": "single",
+                  "sort": "none"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": 0,
+                        "color": "green"
+                      },
+                      {
+                        "value": 80,
+                        "color": "red"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "palette-classic"
+                  },
+                  "custom": {
+                    "axisBorderShow": false,
+                    "axisCenteredZero": false,
+                    "axisColorMode": "text",
+                    "axisLabel": "",
+                    "axisPlacement": "auto",
+                    "barAlignment": 0,
+                    "barWidthFactor": 0.6,
+                    "drawStyle": "line",
+                    "fillOpacity": 0,
+                    "gradientMode": "none",
+                    "hideFrom": {
+                      "legend": false,
+                      "tooltip": false,
+                      "viz": false
+                    },
+                    "insertNulls": false,
+                    "lineInterpolation": "linear",
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "scaleDistribution": {
+                      "type": "linear"
+                    },
+                    "showPoints": "auto",
+                    "showValues": false,
+                    "spanNulls": false,
+                    "stacking": {
+                      "group": "A",
+                      "mode": "none"
+                    },
+                    "thresholdsStyle": {
+                      "mode": "off"
+                    }
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
       }
     },
     "layout": {
@@ -3016,7 +3134,7 @@
                       "spec": {
                         "x": 0,
                         "y": 8,
-                        "width": 24,
+                        "width": 12,
                         "height": 11,
                         "element": {
                           "kind": "ElementReference",
@@ -3034,6 +3152,19 @@
                         "element": {
                           "kind": "ElementReference",
                           "name": "panel-13"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 12,
+                        "y": 8,
+                        "width": 12,
+                        "height": 11,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-26"
                         }
                       }
                     }
