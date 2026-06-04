@@ -9,5 +9,6 @@ opentelemetry-exporter-prometheus==0.49b2
 opentelemetry-instrumentation-fastapi==0.49b2
 opentelemetry-instrumentation-asgi==0.49b2
 opentelemetry-instrumentation-httpx==0.49b2
+opentelemetry-instrumentation-system-metrics==0.49b2
 prometheus-client==0.21.0
 structlog==24.4.0

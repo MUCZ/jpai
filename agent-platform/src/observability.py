@@ -29,6 +29,7 @@ from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExp
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from opentelemetry.instrumentation.system_metrics import SystemMetricsInstrumentor
 
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
 
@@ -99,6 +100,7 @@ def init_observability() -> None:
 
     # 4. Auto-instrumentation
     HTTPXClientInstrumentor().instrument()
+    SystemMetricsInstrumentor().instrument()
 
     _INITIALIZED = True
 

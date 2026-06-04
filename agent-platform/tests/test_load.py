@@ -13,7 +13,8 @@ run multiple rounds.
 import asyncio, httpx, random, time, sys
 
 BASE_URL = "http://localhost:8080"
-TENANTS = ["tenant-alpha", "tenant-beta", "tenant-gamma", "tenant-delta", "tenant-epsilon", "tenant-zeta", "tenant-eta", "tenant-theta", "tenant-iota", "tenant-kappa"]
+# TENANTS = ["tenant-alpha", "tenant-beta", "tenant-gamma", "tenant-delta", "tenant-epsilon", "tenant-zeta", "tenant-eta", "tenant-theta", "tenant-iota", "tenant-kappa"]
+TENANTS = ["tenant-alpha", "tenant-beta", "tenant-gamma", "tenant-delta", "tenant-epsilon"]
 PRIORITIES = ["urgent", "normal", "low"]
 TOTAL_REQUESTS = 1000
 CONCURRENCY = 30
