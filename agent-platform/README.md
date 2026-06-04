@@ -1,8 +1,8 @@
 # Agent Platform
 
-A FastAPI-based agent execution service with structured logging, Prometheus metrics, and OpenTelemetry traces.
+A FastAPI-based agent execution service with structured logging, Prometheus metrics, Loki logs, and OpenTelemetry traces.
 
-## Local stack
+## Local Stack
 
 Use Docker for the standard local setup:
 
@@ -10,22 +10,22 @@ Use Docker for the standard local setup:
 docker compose up --build
 ```
 
-This starts:
+This starts the following services:
 
-- API: `http://localhost:8080`
-- Mock LLM: `http://localhost:8081`
-- Prometheus: `http://localhost:9090`
-- Grafana: `http://localhost:3000` (admin / `admin`)
-- Jaeger: `http://localhost:16686`
+- **API**: `http://localhost:8080` (FastAPI Agent Execution Service)
+- **Mock LLM**: `http://localhost:8081` (Mock LLM service providing `/v1/inference`)
+- **Grafana (OTel LGTM)**: `http://localhost:3000` (Bundled Prometheus, Tempo, and Loki dashboard backend, default theme light)
 
-The application exports spans to Jaeger over OTLP HTTP in local Docker via:
+### Observability Configuration
+
+The application exports spans, metrics, and logs using OTLP over gRPC:
 
 - `OTEL_SERVICE_NAME=agent-service`
-- `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318/v1/traces`
+- `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-backend:4317`
 
-`agent-service` waits for Jaeger to become healthy before startup so traces are not dropped during local boot.
+The `agent-service` container waits for the `otel-backend` service health check (`test -f /tmp/ready`) to report healthy before starting up.
 
-## Useful checks
+## Useful Checks
 
 Health endpoint:
 
@@ -45,32 +45,29 @@ curl -X POST http://localhost:8080/tasks \
   }'
 ```
 
-Fetch Prometheus metrics:
+Fetch Prometheus metrics directly from the API:
 
 ```bash
 curl http://localhost:8080/metrics
 ```
 
-## Trace workflow
+## Trace and Log Workflow
 
 1. Start the stack with `docker compose up --build`.
 2. Send a `POST /tasks` request.
-3. Note the `X-Trace-Id` response header.
-4. Open Jaeger at `http://localhost:16686`.
-5. Search for service `agent-service` and inspect the trace tree.
-6. You should see the HTTP request span plus nested task, stage, tool, and LLM spans.
-
-Grafana also provisions a Jaeger datasource, so you can inspect traces in Grafana Explore alongside Prometheus metrics.
+3. Note the `X-Trace-Id` response header returned by the API.
+4. Open Grafana at `http://localhost:3000`.
+5. Go to **Explore** and select the **Tempo** or **Loki** data sources to search by trace ID or service name to view structured traces, spans, and correlating logs.
 
 ## Tests
 
-Run the observability test suite in Docker:
+Run the observability test suite inside the Docker environment (matching Python 3.12):
 
 ```bash
 docker compose run --build --rm agent-service python -m unittest tests.test_observability
 ```
 
-For concurrent traffic generation after the stack is running:
+For concurrent load testing against a running stack:
 
 ```bash
 python -m tests.test_load
