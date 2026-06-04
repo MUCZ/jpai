@@ -35,4 +35,5 @@ services:
       - GF_USERS_DEFAULT_THEME=light
     volumes:
       - ./conf/prometheus/prometheus.yaml:/otel-lgtm/prometheus.yaml
-      - ./conf/grafana/provisioning/dashboard:/etc/grafana/provisioning/dashboards
+      - ./conf/grafana/provisioning/dashboard/provider.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/custom-provider.yaml
+      - ./conf/grafana/provisioning/dashboard/custom:/otel-lgtm/grafana/conf/provisioning/dashboards/custom

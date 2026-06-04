@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import copy
 import time
 import functools
 import asyncio
@@ -32,7 +33,7 @@ from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
 
 from src.models import Outcome, Priority
-from src.config import METRICS_TENANT_BUCKET_COUNT, METRICS_TENANT_LABEL_MODE
+from src.config import METRICS_TENANT_BUCKET_COUNT, METRICS_TENANT_LABEL_MODE, LOG_LEVEL
 
 _INITIALIZED = False
 
@@ -87,6 +88,21 @@ def init_observability() -> None:
     _INITIALIZED = True
 
 
+class OTelLoggingHandler(LoggingHandler):
+    """Custom OTel LoggingHandler to copy LogRecord and sanitize non-primitive attributes
+
+    This prevents warnings/errors during attribute serialization and avoids side effects
+    on other standard library handlers (like the console formatter).
+    """
+    def emit(self, record: logging.LogRecord) -> None:
+        # Create a shallow copy of the LogRecord to prevent attribute mutations
+        # from leaking to other handlers sharing the same LogRecord instance by reference.
+        record_copy = copy.copy(record)
+        if hasattr(record_copy, "_logger"):
+            delattr(record_copy, "_logger")
+        super().emit(record_copy)
+
+
 # ── Structured logging setup ──────────────────────────────────
 def _setup_logging(resource: Resource, endpoint: str | None) -> None:
     """Configure structlog + OTEL log bridge."""
@@ -99,10 +115,19 @@ def _setup_logging(resource: Resource, endpoint: str | None) -> None:
     set_logger_provider(log_provider)
 
     # Bridge: stdlib logging → OTEL
-    otel_handler = LoggingHandler(logger_provider=log_provider)
+    otel_handler = OTelLoggingHandler(logger_provider=log_provider)
+    
+    # Configure logger levels using standard hierarchy (Approach 1):
+    # Set the root logger level to INFO (or higher) to suppress third-party debug logs,
+    # and configure the 'src' package logger to the application's LOG_LEVEL.
+    app_level = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
+    root_level = max(logging.INFO, app_level)
+    
     root = logging.getLogger()
     root.addHandler(otel_handler)
-    root.setLevel(getattr(logging, os.getenv("LOG_LEVEL", "INFO")))
+    root.setLevel(root_level)
+    
+    logging.getLogger("src").setLevel(app_level)
 
     # structlog → stdlib (so logs flow through the OTEL handler)
     structlog.configure(
