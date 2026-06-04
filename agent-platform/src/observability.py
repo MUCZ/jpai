@@ -78,7 +78,6 @@ def init_observability() -> None:
         )
         
     from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
-    # User requested buckets: [0.1, 0.5, 1, 2, 5, 10, 20, 30, 45]
     # Because http.server.duration is recorded in milliseconds by default, 
     # we convert these seconds into milliseconds.
     http_duration_view = View(
