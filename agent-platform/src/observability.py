@@ -84,7 +84,7 @@ def init_observability() -> None:
     http_duration_view = View(
         instrument_name="http.server.duration",
         aggregation=ExplicitBucketHistogramAggregation(
-            boundaries=(100.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0, 30000.0, 45000.0)
+            boundaries=(100.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0, 29000.0, 30000.0, 31000.0, 32000.0, 40000.0, 45000.0, 60000.0)
         ),
     )
     
