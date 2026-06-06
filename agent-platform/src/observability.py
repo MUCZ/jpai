@@ -88,10 +88,42 @@ def init_observability() -> None:
         ),
     )
     
+    # Custom boundaries in seconds for task execution, queuing, LLM, and tool call latencies.
+    # We include fine-grained boundaries around the 30-second timeout threshold to avoid interpolation errors.
+    duration_boundaries = (0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.5, 5.0, 7.5, 10.0, 15.0, 20.0, 25.0, 28.0, 29.0, 30.0, 31.0, 32.0, 35.0, 40.0, 50.0, 60.0)
+    
+    task_duration_view = View(
+        instrument_name="agent.task.duration",
+        aggregation=ExplicitBucketHistogramAggregation(boundaries=duration_boundaries),
+    )
+    task_stage_duration_view = View(
+        instrument_name="agent.task.stage.duration",
+        aggregation=ExplicitBucketHistogramAggregation(boundaries=duration_boundaries),
+    )
+    task_queue_wait_view = View(
+        instrument_name="agent.task.queue.wait",
+        aggregation=ExplicitBucketHistogramAggregation(boundaries=duration_boundaries),
+    )
+    llm_request_duration_view = View(
+        instrument_name="agent.llm.request.duration",
+        aggregation=ExplicitBucketHistogramAggregation(boundaries=duration_boundaries),
+    )
+    tool_call_duration_view = View(
+        instrument_name="agent.tool.call.duration",
+        aggregation=ExplicitBucketHistogramAggregation(boundaries=duration_boundaries),
+    )
+    
     meter_provider = MeterProvider(
         resource=resource, 
         metric_readers=readers,
-        views=[http_duration_view]
+        views=[
+            http_duration_view,
+            task_duration_view,
+            task_stage_duration_view,
+            task_queue_wait_view,
+            llm_request_duration_view,
+            tool_call_duration_view,
+        ]
     )
     metrics.set_meter_provider(meter_provider)
 
