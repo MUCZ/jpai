@@ -16,6 +16,16 @@ This starts the following services:
 - **Mock LLM**: `http://localhost:8081` (Mock LLM service providing `/v1/inference`)
 - **Grafana (OTel LGTM)**: `http://localhost:3000` (Bundled Prometheus, Tempo, and Loki dashboard backend, default theme light)
 
+### Updating Only the API Service
+
+When you need to rebuild and restart only the `agent-service` container without touching Grafana, Prometheus, the mock LLM, or other dependent services, run:
+
+```bash
+docker compose up -d --build --no-deps agent-service
+```
+
+The `--no-deps` flag is important: it prevents Docker Compose from recreating or restarting dependency containers.
+
 ### Observability Configuration
 
 The application exports spans, metrics, and logs using OTLP over gRPC:

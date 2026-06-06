@@ -7,7 +7,7 @@ import io
 import json
 import os
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from unittest.mock import patch
 
 os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
@@ -42,8 +42,12 @@ class _FakeResponse:
 class _FakeAsyncClient:
     def __init__(self, responses: list[_FakeResponse]):
         self._responses = list(responses)
+        self.timeouts: list[float | None] = []
 
-    async def post(self, url: str, json: dict) -> _FakeResponse:
+    async def post(
+        self, url: str, json: dict, timeout: float | None = None
+    ) -> _FakeResponse:
+        self.timeouts.append(timeout)
         return self._responses.pop(0)
 
 
@@ -52,6 +56,7 @@ class ObservabilityTests(unittest.TestCase):
         import structlog
         main.task_store.clear()
         main._response_cache.clear()
+        main._task_scheduler = main._PriorityTaskScheduler(main.MAX_CONCURRENT_TASKS)
         self.client = TestClient(main.app)
         self.log_stream = io.StringIO()
         structlog.reset_defaults()
@@ -194,6 +199,27 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual(tools_calls["count"], 1)
         self.assertGreater(self._metric_value("agent_tasks_total", {"tenant_id": metric_tenant, "priority": "normal", "status": "completed", "source": "cache"}), before_cache)
 
+    def test_response_cache_reuses_results_across_priorities(self) -> None:
+        llm_calls = {"count": 0}
+        tools_calls = {"count": 0}
+        payload = {
+            "task_description": "Summarise customer feedback",
+            "tenant_id": "tenant-cache-priority",
+            "priority": "normal",
+        }
+
+        with self._mock_orchestrator(llm_calls=llm_calls, tools_calls=tools_calls):
+            first = self.client.post("/tasks", json=payload)
+            second = self.client.post(
+                "/tasks",
+                json={**payload, "priority": "urgent"},
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(llm_calls["count"], 3)
+        self.assertEqual(tools_calls["count"], 1)
+
     def test_llm_retry_metrics_are_recorded(self) -> None:
         metric_tenant = metric_tenant_label("tenant-retry")
         before_retry = self._metric_value("agent_llm_retries_total", {"tenant_id": metric_tenant, "priority": "normal", "operation": "plan", "reason": "status_500"})
@@ -211,6 +237,153 @@ class ObservabilityTests(unittest.TestCase):
         self.assertGreater(self._metric_value("agent_llm_retries_total", {"tenant_id": metric_tenant, "priority": "normal", "operation": "plan", "reason": "status_500"}), before_retry)
         self.assertGreater(self._metric_value("agent_llm_requests_total", {"tenant_id": metric_tenant, "priority": "normal", "operation": "plan", "outcome": "success"}), before_success)
 
+    def test_priority_policy_controls_llm_timeout_and_attempts(self) -> None:
+        test_cases = [
+            (
+                Priority.URGENT,
+                1.5,
+                [
+                    _FakeResponse(500),
+                    _FakeResponse(
+                        200,
+                        {"text": "ok", "prompt_tokens": 7, "completion_tokens": 3},
+                    ),
+                ],
+                "ok",
+                2,
+            ),
+            (
+                Priority.NORMAL,
+                5.0,
+                [
+                    _FakeResponse(500),
+                    _FakeResponse(500),
+                    _FakeResponse(
+                        200,
+                        {"text": "ok", "prompt_tokens": 7, "completion_tokens": 3},
+                    ),
+                ],
+                "ok",
+                3,
+            ),
+            (
+                Priority.LOW,
+                5.0,
+                [_FakeResponse(500), _FakeResponse(200, {"text": "should-not-run"})],
+                "",
+                1,
+            ),
+        ]
+
+        for priority, timeout, responses, text, calls in test_cases:
+            with self.subTest(priority=priority.value):
+                fake_client = _FakeAsyncClient(responses)
+                with patch.object(llm_client, "_get_client", return_value=fake_client), \
+                     patch.object(llm_client, "RETRY_BASE_DELAY", 0), \
+                     patch.object(llm_client.random, "uniform", return_value=0):
+                    result = asyncio.run(llm_client.call_llm(
+                        "Plan the task",
+                        max_tokens=64,
+                        operation="plan",
+                        tenant_id=f"tenant-{priority.value}",
+                        priority=priority,
+                    ))
+
+                self.assertEqual(result["text"], text)
+                self.assertEqual(len(fake_client.timeouts), calls)
+                self.assertEqual(fake_client.timeouts, [timeout] * calls)
+
+    def test_priority_limiter_admits_urgent_before_older_normal(self) -> None:
+        async def run_test() -> list[str]:
+            scheduler = main._PriorityTaskScheduler(1)
+            first_slot = await scheduler.acquire("tenant-blocker", Priority.LOW)
+            order = []
+
+            async def wait_for_slot(priority: Priority, label: str):
+                slot = await scheduler.acquire(f"tenant-{label}", priority)
+                order.append(label)
+                await slot.release()
+
+            normal = asyncio.create_task(wait_for_slot(Priority.NORMAL, "normal"))
+            await asyncio.sleep(0)
+            urgent = asyncio.create_task(wait_for_slot(Priority.URGENT, "urgent"))
+            await asyncio.sleep(0)
+            await first_slot.release()
+            await asyncio.gather(normal, urgent)
+            return order
+
+        self.assertEqual(asyncio.run(run_test()), ["urgent", "normal"])
+
+    def test_same_tenant_scheduler_admits_urgent_before_older_low(self) -> None:
+        async def run_test() -> list[str]:
+            scheduler = main._PriorityTaskScheduler(1)
+            blocker_slot = await scheduler.acquire("tenant-blocker", Priority.NORMAL)
+            order = []
+
+            async def wait_for_slot(priority: Priority, label: str):
+                slot = await scheduler.acquire("tenant-shared", priority)
+                order.append(label)
+                await slot.release()
+
+            low = asyncio.create_task(wait_for_slot(Priority.LOW, "low"))
+            await asyncio.sleep(0)
+            urgent = asyncio.create_task(wait_for_slot(Priority.URGENT, "urgent"))
+            await asyncio.sleep(0)
+            await blocker_slot.release()
+            await asyncio.gather(low, urgent)
+            return order
+
+        self.assertEqual(asyncio.run(run_test()), ["urgent", "low"])
+
+    def test_scheduler_prunes_cancelled_waiters_before_waking_next(self) -> None:
+        async def run_test() -> tuple[int, set[str], int]:
+            scheduler = main._PriorityTaskScheduler(1)
+            blocker_slot = await scheduler.acquire("tenant-blocker", Priority.NORMAL)
+            admitted = []
+
+            async def wait_for_slot(tenant: str):
+                slot = await scheduler.acquire(tenant, Priority.NORMAL)
+                admitted.append(tenant)
+                await slot.release()
+
+            cancelled = asyncio.create_task(wait_for_slot("tenant-cancelled"))
+            await asyncio.sleep(0)
+            cancelled.cancel()
+            with suppress(asyncio.CancelledError):
+                await cancelled
+
+            next_waiter = asyncio.create_task(wait_for_slot("tenant-next"))
+            await asyncio.sleep(0)
+            await blocker_slot.release()
+            await asyncio.wait_for(next_waiter, timeout=0.1)
+
+            return scheduler._running, scheduler._active_tenants, len(scheduler._waiters)
+
+        running, active_tenants, waiter_count = asyncio.run(run_test())
+        self.assertEqual(running, 0)
+        self.assertEqual(active_tenants, set())
+        self.assertEqual(waiter_count, 0)
+
+    def test_scheduler_cancelled_acquire_does_not_corrupt_active_slot(self) -> None:
+        async def run_test() -> tuple[int, set[str]]:
+            scheduler = main._PriorityTaskScheduler(1)
+            active_slot = await scheduler.acquire("tenant-active", Priority.NORMAL)
+
+            waiter = asyncio.create_task(
+                scheduler.acquire("tenant-waiting", Priority.NORMAL)
+            )
+            await asyncio.sleep(0)
+            waiter.cancel()
+            with suppress(asyncio.CancelledError):
+                await waiter
+
+            await active_slot.release()
+            return scheduler._running, scheduler._active_tenants
+
+        running, active_tenants = asyncio.run(run_test())
+        self.assertEqual(running, 0)
+        self.assertEqual(active_tenants, set())
+
     def test_timeout_path_records_timeout_metric(self) -> None:
         async def slow_run_task(*args, **kwargs):
             await asyncio.sleep(0.05)
@@ -225,6 +398,45 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "failed")
         self.assertGreater(self._metric_value("agent_task_timeouts_total", {"tenant_id": metric_tenant, "priority": "normal"}), before_timeouts)
+
+    def test_scheduler_wait_timeout_records_queue_wait_metric(self) -> None:
+        main._task_scheduler = main._PriorityTaskScheduler(1)
+        blocker = asyncio.run(
+            main._task_scheduler.acquire("tenant-blocker", Priority.NORMAL)
+        )
+        metric_tenant = metric_tenant_label("tenant-queue-timeout")
+        before_waits = self._metric_value(
+            "agent_task_queue_wait_seconds_count",
+            {
+                "tenant_id": metric_tenant,
+                "priority": "low",
+                "queue": "priority_scheduler",
+            },
+        )
+
+        try:
+            with patch.object(main, "TASK_TIMEOUT_SECONDS", 0.01):
+                response = self.client.post("/tasks", json={
+                    "task_description": "Wait behind full scheduler",
+                    "tenant_id": "tenant-queue-timeout",
+                    "priority": "low",
+                })
+        finally:
+            asyncio.run(blocker.release())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "failed")
+        self.assertGreater(
+            self._metric_value(
+                "agent_task_queue_wait_seconds_count",
+                {
+                    "tenant_id": metric_tenant,
+                    "priority": "low",
+                    "queue": "priority_scheduler",
+                },
+            ),
+            before_waits,
+        )
 
     def test_not_found_response_has_trace_header(self) -> None:
         response = self.client.get("/tasks/does-not-exist")

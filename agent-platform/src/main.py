@@ -1,6 +1,8 @@
 """FastAPI application — Agent Execution Service."""
 
 import asyncio
+import heapq
+import itertools
 import structlog
 import time
 import uuid
@@ -18,6 +20,7 @@ from src.models import Priority, TaskStatus, TaskResult
 from src.orchestrator import run_task
 from src.config import (
     MAX_CONCURRENT_TASKS,
+    PRIORITY_POLICIES,
     RESPONSE_CACHE_MAX_ENTRIES,
     RESPONSE_CACHE_TTL_SECONDS,
     TASK_TIMEOUT_SECONDS,
@@ -51,12 +54,122 @@ task_store: dict[str, TaskResult] = {}
 # Response cache for repeated queries — avoids redundant LLM calls
 _response_cache: OrderedDict[str, dict] = OrderedDict()
 
-# Limit concurrent task executions to protect downstream LLM service
-_task_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+class _PrioritySlot:
+    def __init__(
+        self,
+        scheduler: "_PriorityTaskScheduler",
+        tenant_id: str,
+        slot_id: int,
+    ):
+        self._scheduler = scheduler
+        self._tenant_id = tenant_id
+        self._slot_id = slot_id
+        self._released = False
 
-# Ensure tasks for the same tenant execute in submission order
-# to prevent race conditions on downstream tenant state
-_tenant_locks: dict[str, asyncio.Lock] = {}
+    async def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        await self._scheduler.release(self._tenant_id, self._slot_id)
+
+
+class _PriorityTaskScheduler:
+    """Admit tasks by priority while preventing same-tenant concurrency."""
+
+    def __init__(self, max_concurrent: int):
+        self._max_concurrent = max_concurrent
+        self._running = 0
+        self._active_tenants: set[str] = set()
+        self._active_slots: dict[int, str] = {}
+        self._waiters: list[tuple[int, int, str, asyncio.Future[int]]] = []
+        self._sequence = itertools.count()
+        self._slot_sequence = itertools.count()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, tenant_id: str, priority: Priority) -> _PrioritySlot:
+        waiter = asyncio.get_running_loop().create_future()
+        async with self._lock:
+            heapq.heappush(
+                self._waiters,
+                (_priority_rank(priority), next(self._sequence), tenant_id, waiter),
+            )
+            self._wake_waiters_locked()
+
+        try:
+            slot_id = await waiter
+            return _PrioritySlot(self, tenant_id, slot_id)
+        except BaseException:
+            async with self._lock:
+                if waiter.cancelled():
+                    self._prune_waiters_locked()
+                elif not waiter.done():
+                    waiter.cancel()
+                    self._prune_waiters_locked()
+                else:
+                    self._release_locked(tenant_id, waiter.result())
+                    self._wake_waiters_locked()
+            raise
+
+    async def release(self, tenant_id: str, slot_id: int) -> None:
+        async with self._lock:
+            if self._active_slots.get(slot_id) != tenant_id:
+                raise RuntimeError("priority scheduler released an inactive task")
+            self._release_locked(tenant_id, slot_id)
+            self._wake_waiters_locked()
+
+    def _wake_waiters_locked(self) -> None:
+        while self._running < self._max_concurrent:
+            next_index = self._next_runnable_index_locked()
+            if next_index is None:
+                return
+            _, _, tenant_id, waiter = self._waiters.pop(next_index)
+            heapq.heapify(self._waiters)
+            slot_id = next(self._slot_sequence)
+            self._running += 1
+            self._active_tenants.add(tenant_id)
+            self._active_slots[slot_id] = tenant_id
+            waiter.set_result(slot_id)
+
+    def _release_locked(self, tenant_id: str, slot_id: int) -> None:
+        if self._active_slots.pop(slot_id, None) != tenant_id:
+            return
+        self._running -= 1
+        if tenant_id not in self._active_slots.values():
+            self._active_tenants.discard(tenant_id)
+
+    def _prune_waiters_locked(self) -> None:
+        retained_waiters = [
+            item for item in self._waiters if not item[3].done()
+        ]
+        if len(retained_waiters) != len(self._waiters):
+            self._waiters = retained_waiters
+            heapq.heapify(self._waiters)
+
+    def _next_runnable_index_locked(self) -> Optional[int]:
+        self._prune_waiters_locked()
+        best_index = None
+        best_item = None
+        for index, item in enumerate(self._waiters):
+            _, _, tenant_id, waiter = item
+            if waiter.done():
+                continue
+            if tenant_id in self._active_tenants:
+                continue
+            if best_item is None or item[:2] < best_item[:2]:
+                best_item = item
+                best_index = index
+        return best_index
+
+
+def _priority_rank(priority: Priority) -> int:
+    return PRIORITY_POLICIES.get(
+        priority.value,
+        PRIORITY_POLICIES[Priority.NORMAL.value],
+    )["rank"]
+
+
+# Limit concurrent task executions while keeping each tenant single-flight.
+_task_scheduler = _PriorityTaskScheduler(MAX_CONCURRENT_TASKS)
 
 
 class CreateTaskBody(BaseModel):
@@ -127,6 +240,22 @@ def _record_task_metrics(
     TASK_DURATION.record(duration, attrs)
 
 
+def _record_queue_wait(
+    tenant: str,
+    priority: str,
+    queue: str,
+    duration: float,
+) -> None:
+    TASK_QUEUE_WAIT.record(
+        duration,
+        {
+            "tenant_id": tenant,
+            "priority": priority,
+            "queue": queue,
+        },
+    )
+
+
 @app.middleware("http")
 async def inject_trace_id_and_log(request: Request, call_next):
     """Log requests and inject X-Trace-Id header into response.
@@ -171,8 +300,8 @@ async def create_task(body: CreateTaskBody):
     request_started = perf_counter()
     task_created_at = time.time()
 
-    # Cache key: tenant + description (priority excluded because
-    # task results are priority-independent in the current design)
+    # Cache key: tenant + description. Priority affects scheduling/retries,
+    # not the task result.
     cache_key = f"{body.tenant_id}:{body.task_description}"
     metric_tenant = metric_tenant_label(body.tenant_id)
     with bind_context(
@@ -223,64 +352,53 @@ async def create_task(body: CreateTaskBody):
         span.add_event("task.cache_miss")
 
         async def _guarded_execute():
-            lock = _tenant_locks.setdefault(body.tenant_id, asyncio.Lock())
-
-            tenant_wait_started = perf_counter()
-            with tracer.start_as_current_span("task.wait_tenant_lock"):
-                await lock.acquire()
-            tenant_wait = perf_counter() - tenant_wait_started
-            TASK_QUEUE_WAIT.record(
-                tenant_wait,
-                {
-                    "tenant_id": metric_tenant,
-                    "priority": body.priority.value,
-                    "queue": "tenant_lock",
-                },
-            )
-            logger.debug(
-                "task.lock_acquired",
-                queue="tenant_lock",
-                wait_ms=round(tenant_wait * 1000, 2),
-            )
-
+            scheduler_wait_started = perf_counter()
             try:
-                semaphore_wait_started = perf_counter()
-                with tracer.start_as_current_span("task.wait_global_concurrency"):
-                    await _task_semaphore.acquire()
-                semaphore_wait = perf_counter() - semaphore_wait_started
-                TASK_QUEUE_WAIT.record(
-                    semaphore_wait,
-                    {
-                        "tenant_id": metric_tenant,
-                        "priority": body.priority.value,
-                        "queue": "global_concurrency",
-                    },
+                with tracer.start_as_current_span("task.wait_priority_scheduler"):
+                    slot = await _task_scheduler.acquire(body.tenant_id, body.priority)
+            except asyncio.CancelledError:
+                scheduler_wait = perf_counter() - scheduler_wait_started
+                _record_queue_wait(
+                    metric_tenant,
+                    body.priority.value,
+                    "priority_scheduler",
+                    scheduler_wait,
                 )
                 logger.debug(
-                    "task.concurrency_acquired",
-                    queue="global_concurrency",
-                    wait_ms=round(semaphore_wait * 1000, 2),
+                    "task.scheduler_cancelled",
+                    queue="priority_scheduler",
+                    wait_ms=round(scheduler_wait * 1000, 2),
                 )
-
-                try:
-                    TASK_IN_PROGRESS.add(
-                        1, {"tenant_id": metric_tenant, "priority": body.priority.value}
-                    )
-                    task_store[task_id].status = TaskStatus.RUNNING
-                    return await run_task(
-                        task_id=task_id,
-                        description=body.task_description,
-                        tenant_id=body.tenant_id,
-                        priority=body.priority,
-                        created=task_created_at,
-                    )
-                finally:
-                    TASK_IN_PROGRESS.add(
-                        -1, {"tenant_id": metric_tenant, "priority": body.priority.value}
-                    )
-                    _task_semaphore.release()
+                raise
+            scheduler_wait = perf_counter() - scheduler_wait_started
+            _record_queue_wait(
+                metric_tenant,
+                body.priority.value,
+                "priority_scheduler",
+                scheduler_wait,
+            )
+            logger.debug(
+                "task.scheduler_acquired",
+                queue="priority_scheduler",
+                wait_ms=round(scheduler_wait * 1000, 2),
+            )
+            try:
+                TASK_IN_PROGRESS.add(
+                    1, {"tenant_id": metric_tenant, "priority": body.priority.value}
+                )
+                task_store[task_id].status = TaskStatus.RUNNING
+                return await run_task(
+                    task_id=task_id,
+                    description=body.task_description,
+                    tenant_id=body.tenant_id,
+                    priority=body.priority,
+                    created=task_created_at,
+                )
             finally:
-                lock.release()
+                TASK_IN_PROGRESS.add(
+                    -1, {"tenant_id": metric_tenant, "priority": body.priority.value}
+                )
+                await slot.release()
 
         try:
             result = await asyncio.wait_for(

@@ -14,12 +14,13 @@ from opentelemetry.trace import Status, StatusCode
 
 from src.config import (
     LLM_SERVER_URL,
-    TASK_TIMEOUT_SECONDS,
     RETRY_MAX_ATTEMPTS,
     RETRY_BASE_DELAY,
     RETRY_BACKOFF_FACTOR,
     LLM_RATE_LIMIT_RPS,
     LLM_RATE_LIMIT_BURST,
+    PRIORITY_POLICIES,
+    TASK_TIMEOUT_SECONDS,
     TOKEN_COST_PER_1K_INPUT,
     TOKEN_COST_PER_1K_OUTPUT,
 )
@@ -86,6 +87,13 @@ class _TokenBucket:
 _rate_limiter = _TokenBucket(rate=LLM_RATE_LIMIT_RPS, capacity=LLM_RATE_LIMIT_BURST)
 
 
+def _priority_policy(priority: Priority) -> dict:
+    return PRIORITY_POLICIES.get(
+        priority.value,
+        PRIORITY_POLICIES[Priority.NORMAL.value],
+    )
+
+
 async def call_llm(
     prompt: str,
     max_tokens: int = 512,
@@ -103,6 +111,10 @@ async def call_llm(
     last_error = None
     last_status = None
     accumulated_tokens = 0
+    policy = _priority_policy(priority)
+    max_attempts = min(policy["llm_max_attempts"], RETRY_MAX_ATTEMPTS)
+    attempt_timeout = policy["llm_attempt_timeout_seconds"]
+    deadline = time.monotonic() + TASK_TIMEOUT_SECONDS
     labels = {
         "tenant_id": metric_tenant_label(tenant_id),
         "priority": priority.value,
@@ -117,14 +129,18 @@ async def call_llm(
         span.set_attribute("llm.operation", operation)
         span.set_attribute("llm.max_tokens", max_tokens)
         span.set_attribute("llm.prompt_length", len(prompt))
+        span.set_attribute("llm.attempt_timeout_seconds", attempt_timeout)
+        span.set_attribute("llm.max_attempts", max_attempts)
         logger.debug(
             "llm.started",
             operation=operation,
             prompt_length=len(prompt),
             max_tokens=max_tokens,
+            attempt_timeout_seconds=attempt_timeout,
+            max_attempts=max_attempts,
         )
 
-        for attempt in range(RETRY_MAX_ATTEMPTS):
+        for attempt in range(max_attempts):
             attempt_number = attempt + 1
             started = time.perf_counter()
             outcome = Outcome.ERROR
@@ -136,6 +152,7 @@ async def call_llm(
                 response = await client.post(
                     f"{LLM_SERVER_URL}/v1/inference",
                     json={"prompt": prompt, "max_tokens": max_tokens},
+                    timeout=attempt_timeout,
                 )
 
                 status_code = str(response.status_code)
@@ -215,11 +232,32 @@ async def call_llm(
                 duration_ms=round(duration * 1000, 2),
             )
 
-            if attempt < RETRY_MAX_ATTEMPTS - 1:
+            if attempt < max_attempts - 1:
                 delay = RETRY_BASE_DELAY * (RETRY_BACKOFF_FACTOR ** attempt)
                 jitter = random.uniform(0, delay * 0.3)
                 sleep_for = delay + jitter
                 reason = "timeout" if status_code == "408" else f"status_{status_code}"
+                remaining_budget = deadline - time.monotonic()
+                if remaining_budget < sleep_for + min(attempt_timeout, TASK_TIMEOUT_SECONDS):
+                    last_error = (
+                        f"LLM retry skipped: insufficient request budget after {reason}"
+                    )
+                    span.add_event(
+                        "llm.retry_skipped",
+                        {
+                            "attempt": attempt_number,
+                            "reason": reason,
+                            "remaining_budget_ms": round(remaining_budget * 1000, 2),
+                        },
+                    )
+                    logger.info(
+                        "llm.retry_skipped",
+                        operation=operation,
+                        attempt=attempt_number,
+                        reason=reason,
+                        remaining_budget_ms=round(remaining_budget * 1000, 2),
+                    )
+                    break
                 LLM_RETRIES_TOTAL.add(1, {**labels, "reason": reason})
                 span.add_event(
                     "llm.retry_scheduled",
