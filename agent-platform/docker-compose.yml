@@ -33,7 +33,23 @@ services:
       start_period: 10s
     environment:
       - GF_USERS_DEFAULT_THEME=light
+      - GF_SECURITY_ADMIN_PASSWORD=admin # Static admin password to avoid manual UI token generation
     volumes:
       - ./conf/prometheus/prometheus.yaml:/otel-lgtm/prometheus.yaml
       - ./conf/grafana/provisioning/dashboard/provider.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/custom-provider.yaml
       - ./conf/grafana/provisioning/dashboard/custom:/otel-lgtm/grafana/conf/provisioning/dashboards/custom
+
+  mcp-grafana:
+    image: grafana/mcp-grafana:latest
+    container_name: mcp-grafana
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - GRAFANA_URL=http://otel-backend:3000 
+      - GRAFANA_USERNAME=admin
+      - GRAFANA_PASSWORD=admin
+    command: -t streamable-http # Run as persistent SSE server for remote/host MCP clients
+    depends_on:
+      otel-backend:
+        condition: service_healthy

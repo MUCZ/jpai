@@ -1,0 +1,2 @@
+[mcp_servers.grafana]
+url = "http://localhost:8000/mcp" # Connects to the local mcp-grafana service in this workspace
