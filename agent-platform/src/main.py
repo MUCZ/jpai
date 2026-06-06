@@ -272,7 +272,7 @@ async def create_task(body: CreateTaskBody):
                         description=body.task_description,
                         tenant_id=body.tenant_id,
                         priority=body.priority,
-                        created_at=task_created_at,
+                        created=task_created_at,
                     )
                 finally:
                     TASK_IN_PROGRESS.add(

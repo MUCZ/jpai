@@ -24,7 +24,7 @@ logger = structlog.get_logger(__name__)
 
 async def run_task(task_id: str, description: str,
                    tenant_id: str, priority: Priority,
-                   created_at: float) -> TaskResult:
+                   created: float) -> TaskResult:
     """Execute a full agent task through the plan-execute-summarise pipeline."""
     total_prompt_tokens = 0
     total_completion_tokens = 0
@@ -50,7 +50,7 @@ async def run_task(task_id: str, description: str,
                 error=plan["error"],
                 token_usage={"prompt_tokens": total_prompt_tokens,
                              "completion_tokens": total_completion_tokens},
-                created_at=created_at, completed_at=time.time(),
+                created_at=created, completed_at=time.time(),
             )
 
         # ── Step 2: Tool execution ───────────────────────────
@@ -92,7 +92,7 @@ async def run_task(task_id: str, description: str,
                 error=summary["error"],
                 token_usage={"prompt_tokens": total_prompt_tokens,
                              "completion_tokens": total_completion_tokens},
-                created_at=created_at, completed_at=time.time(),
+                created_at=created, completed_at=time.time(),
             )
 
         # ── Step 4: Quality validation ─────────────────────
@@ -122,7 +122,7 @@ async def run_task(task_id: str, description: str,
                 error=validation["error"],
                 token_usage={"prompt_tokens": total_prompt_tokens,
                              "completion_tokens": total_completion_tokens},
-                created_at=created_at, completed_at=time.time(),
+                created_at=created, completed_at=time.time(),
             )
 
         # Record execution details for audit trail
@@ -147,7 +147,7 @@ async def run_task(task_id: str, description: str,
             result=summary.get("text", ""),
             token_usage={"prompt_tokens": total_prompt_tokens,
                          "completion_tokens": total_completion_tokens},
-            created_at=created_at, completed_at=time.time(),
+            created_at=created, completed_at=time.time(),
         )
 
     except Exception as e:
@@ -170,5 +170,5 @@ async def run_task(task_id: str, description: str,
             error=error_detail,
             token_usage={"prompt_tokens": total_prompt_tokens,
                          "completion_tokens": total_completion_tokens},
-            created_at=created_at, completed_at=time.time(),
+            created_at=created, completed_at=time.time(),
         )
