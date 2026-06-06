@@ -1800,7 +1800,7 @@
         "kind": "Panel",
         "spec": {
           "id": 22,
-          "title": "RSS Memory",
+          "title": "Python Process RSS Memory",
           "description": "",
           "links": [],
           "data": {
@@ -1819,8 +1819,8 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "otelcol_process_runtime_total_sys_memory_bytes",
-                        "legendFormat": "__auto",
+                        "expr": "process_memory_usage_bytes{service_name=\"agent-service\"} or process_memory_usage{service_name=\"agent-service\"}",
+                        "legendFormat": "agent-service RSS",
                         "range": true,
                         "exemplar": true
                       }
@@ -1871,6 +1871,7 @@
                       }
                     ]
                   },
+                  "unit": "bytes",
                   "color": {
                     "mode": "palette-classic"
                   },
