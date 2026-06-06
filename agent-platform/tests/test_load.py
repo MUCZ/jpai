@@ -3,20 +3,21 @@
 Sends concurrent requests to the agent execution service to simulate
 realistic multi-tenant traffic.  Run after starting the platform:
 
-    python -m tests.test_load
+    python -m tests.test_load [--tenants N] [--requests N] [--concurrency N]
 
-Adjust TOTAL_REQUESTS and CONCURRENCY to control load intensity.
-For sustained load testing, increase TOTAL_REQUESTS to 200+ and
-run multiple rounds.
+Parameters:
+  --tenants       Number of tenants (0 to 10) to select from ALL_TENANTS (default: 5).
+  --requests      Total number of requests to send (default: 10000).
+  --concurrency   Number of concurrent requests (default: 30).
 """
 
-import asyncio, httpx, random, time, sys
+import argparse, asyncio, httpx, random, time, sys
 
 BASE_URL = "http://localhost:8080"
-# TENANTS = ["tenant-alpha", "tenant-beta", "tenant-gamma", "tenant-delta", "tenant-epsilon", "tenant-zeta", "tenant-eta", "tenant-theta", "tenant-iota", "tenant-kappa"]
+ALL_TENANTS = ["tenant-alpha", "tenant-beta", "tenant-gamma", "tenant-delta", "tenant-epsilon", "tenant-zeta", "tenant-eta", "tenant-theta", "tenant-iota", "tenant-kappa"]
 TENANTS = ["tenant-alpha", "tenant-beta", "tenant-gamma", "tenant-delta", "tenant-epsilon"]
 PRIORITIES = ["urgent", "normal", "low"]
-TOTAL_REQUESTS = 1000
+TOTAL_REQUESTS = 10000
 CONCURRENCY = 30
 
 TASK_TEMPLATES = [
@@ -73,6 +74,30 @@ async def send_task(client: httpx.AsyncClient, idx: int) -> dict:
 
 
 async def main():
+    parser = argparse.ArgumentParser(description="Load test script.")
+    parser.add_argument("--tenants", type=int, default=5, help="Number of tenants (0 to 10)")
+    parser.add_argument("--requests", type=int, default=10000, help="Total requests")
+    parser.add_argument("--concurrency", type=int, default=30, help="Concurrency")
+    args = parser.parse_args()
+
+    if not (0 <= args.tenants <= 10):
+        print("Error: --tenants must be between 0 and 10.")
+        sys.exit(1)
+    if args.requests < 0:
+        print("Error: --requests must be non-negative.")
+        sys.exit(1)
+    if args.concurrency <= 0:
+        print("Error: --concurrency must be greater than 0.")
+        sys.exit(1)
+    if args.tenants == 0 and args.requests > 0:
+        print("Error: Cannot send requests with 0 tenants.")
+        sys.exit(1)
+
+    global TOTAL_REQUESTS, CONCURRENCY
+    TENANTS[:] = ALL_TENANTS[:args.tenants]
+    TOTAL_REQUESTS = args.requests
+    CONCURRENCY = args.concurrency
+
     sem = asyncio.Semaphore(CONCURRENCY)
 
     async with httpx.AsyncClient() as client:
