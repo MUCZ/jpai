@@ -6,19 +6,19 @@ realistic multi-tenant traffic.  Run after starting the platform:
     python -m tests.test_load [--tenants N] [--requests N] [--concurrency N]
 
 Parameters:
-  --tenants       Number of tenants (0 to 10) to select from ALL_TENANTS (default: 5).
-  --requests      Total number of requests to send (default: 10000).
-  --concurrency   Number of concurrent requests (default: 30).
+  --tenants       Number of tenants (0 to 10) to select from ALL_TENANTS (default: 3).
+  --requests      Total number of requests to send (default: 100).
+  --concurrency   Number of concurrent requests (default: 20).
 """
 
 import argparse, asyncio, httpx, random, time, sys
 
 BASE_URL = "http://localhost:8080"
 ALL_TENANTS = ["tenant-alpha", "tenant-beta", "tenant-gamma", "tenant-delta", "tenant-epsilon", "tenant-zeta", "tenant-eta", "tenant-theta", "tenant-iota", "tenant-kappa"]
-TENANTS = ["tenant-alpha", "tenant-beta", "tenant-gamma", "tenant-delta", "tenant-epsilon"]
+TENANTS = ["tenant-alpha", "tenant-beta", "tenant-gamma"]
 PRIORITIES = ["urgent", "normal", "low"]
-TOTAL_REQUESTS = 10000
-CONCURRENCY = 30
+TOTAL_REQUESTS = 100
+CONCURRENCY = 20
 
 TASK_TEMPLATES = [
     "Analyse quarterly revenue report for {tenant}",

@@ -70,7 +70,8 @@
                         "expr": "sum(rate(agent_tasks_total[1m])) by (status)\n",
                         "instant": false,
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -186,9 +187,10 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.95, sum(rate(agent_task_stage_duration_seconds_bucket[120s])) by (le, stage))",
+                        "expr": "histogram_quantile(0.95, sum(rate(agent_task_stage_duration_seconds_bucket[60s])) by (le, stage))",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -306,7 +308,8 @@
                         "editorMode": "code",
                         "expr": "sum(agent_task_in_progress) by (priority)",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -424,7 +427,8 @@
                         "editorMode": "code",
                         "expr": "sum(rate(agent_task_queue_wait_seconds_sum{queue=\"global_concurrency\"}[1m])) by (priority) / sum(rate(agent_task_queue_wait_seconds_count{queue=\"global_concurrency\"}[1m])) by (priority)",
                         "legendFormat": "{{priority}}",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -542,7 +546,8 @@
                         "editorMode": "code",
                         "expr": "sum(rate(agent_task_timeouts_total[1m])) by (tenant_id)\n",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -660,7 +665,8 @@
                         "editorMode": "code",
                         "expr": "sum(rate(agent_task_timeouts_total[1m])) by (priority)\n",
                         "legendFormat": "{{priority}}",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -778,7 +784,8 @@
                         "editorMode": "code",
                         "expr": "sum(rate(agent_llm_requests_total[1m])) by (operation, outcome)",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -894,9 +901,10 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.99, sum(rate(agent_llm_request_duration_seconds_bucket[120s])) by (le))",
+                        "expr": "histogram_quantile(0.99, sum(rate(agent_llm_request_duration_seconds_bucket[60s])) by (le))",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -1014,7 +1022,8 @@
                         "editorMode": "code",
                         "expr": "sum(rate(agent_llm_tokens_total[1m])) by (token_type)",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -1132,7 +1141,8 @@
                         "editorMode": "code",
                         "expr": "sum(rate(agent_llm_retries_total[1m])) by (reason)",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -1250,7 +1260,8 @@
                         "editorMode": "code",
                         "expr": "rate(agent_llm_rate_limit_wait_seconds_sum[1m]) / rate(agent_llm_rate_limit_wait_seconds_count[1m])",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -1368,7 +1379,8 @@
                         "editorMode": "code",
                         "expr": "sum(rate(agent_tool_calls_total[1m])) by (tool_name)",
                         "legendFormat": "{{tool_name}}",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -1484,9 +1496,10 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "sum(rate(agent_tasks_total{status=\"completed\"}[120s])) / sum(rate(agent_tasks_total[120s])) * 100",
+                        "expr": "sum(rate(agent_tasks_total{status=\"completed\"}[60s])) / sum(rate(agent_tasks_total[60s])) * 100",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -1568,9 +1581,10 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "sum(rate(agent_cache_operations_total{result=\"hit\"}[120s])) / sum(rate(agent_cache_operations_total[120s])) * 100",
+                        "expr": "sum(rate(agent_cache_operations_total{result=\"hit\"}[60s])) / sum(rate(agent_cache_operations_total[60s])) * 100",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -1688,7 +1702,8 @@
                         "editorMode": "code",
                         "expr": "agent_cache_entries",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -1806,7 +1821,8 @@
                         "editorMode": "code",
                         "expr": "otelcol_process_runtime_total_sys_memory_bytes",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -1924,7 +1940,8 @@
                         "editorMode": "code",
                         "expr": "rate(otelcol_process_cpu_seconds_total[1m])\n",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -2042,7 +2059,8 @@
                         "editorMode": "code",
                         "expr": "process_open_file_descriptor_count",
                         "legendFormat": "open FDs",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -2160,7 +2178,8 @@
                         "editorMode": "code",
                         "expr": "rate(process_runtime_cpython_gc_count_bytes_total[1m])",
                         "legendFormat": "{{count}}",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -2276,9 +2295,10 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "sum(increase(agent_llm_cost_usd_USD_total[120s])) by (operation)\n",
+                        "expr": "sum(increase(agent_llm_cost_usd_USD_total[60s])) by (operation)\n",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -2362,7 +2382,8 @@
                         "editorMode": "code",
                         "expr": "sum(agent_llm_cost_usd_USD_total)",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -2446,7 +2467,8 @@
                         "editorMode": "code",
                         "expr": "sum(rate(http_server_duration_milliseconds_count[1m])) by (http_status_code, http_target)",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -2564,7 +2586,8 @@
                         "editorMode": "code",
                         "expr": "sum(rate(http_server_duration_milliseconds_count{http_status_code=~\"5..\"}[1m])) by (http_target)",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -2613,9 +2636,10 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.5, sum(rate(http_server_duration_milliseconds_bucket[120s])) by (le)) / 1000",
+                        "expr": "histogram_quantile(0.5, sum(rate(http_server_duration_milliseconds_bucket[60s])) by (le)) / 1000",
                         "legendFormat": "P50",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -2634,9 +2658,10 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.9, sum(rate(http_server_duration_milliseconds_bucket[120s])) by (le)) / 1000",
+                        "expr": "histogram_quantile(0.9, sum(rate(http_server_duration_milliseconds_bucket[60s])) by (le)) / 1000",
                         "legendFormat": "P90",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "B",
@@ -2655,9 +2680,10 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.99, sum(rate(http_server_duration_milliseconds_bucket[120s])) by (le)) / 1000",
+                        "expr": "histogram_quantile(0.99, sum(rate(http_server_duration_milliseconds_bucket[60s])) by (le)) / 1000",
                         "legendFormat": "P99",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "C",
@@ -2775,7 +2801,8 @@
                         "editorMode": "code",
                         "expr": "sum(http_server_active_requests)",
                         "legendFormat": "__auto",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -2891,9 +2918,10 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.99, sum(rate(agent_task_duration_seconds_bucket[120s])) by (le, priority))",
+                        "expr": "histogram_quantile(0.99, sum(rate(agent_task_duration_seconds_bucket[60s])) by (le, priority))",
                         "legendFormat": "{{priority}}",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -3009,9 +3037,10 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.90, sum(rate(agent_task_duration_seconds_bucket[120s])) by (le, priority))",
+                        "expr": "histogram_quantile(0.90, sum(rate(agent_task_duration_seconds_bucket[60s])) by (le, priority))",
                         "legendFormat": "{{priority}}",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -3127,9 +3156,10 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.50, sum(rate(agent_task_duration_seconds_bucket[120s])) by (le, priority))",
+                        "expr": "histogram_quantile(0.50, sum(rate(agent_task_duration_seconds_bucket[60s])) by (le, priority))",
                         "legendFormat": "{{priority}}",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -3247,7 +3277,8 @@
                         "editorMode": "code",
                         "expr": "sum(rate(agent_task_queue_wait_seconds_sum{queue=\"tenant_lock\"}[1m])) by (priority) / sum(rate(agent_task_queue_wait_seconds_count{queue=\"tenant_lock\"}[1m])) by (priority)",
                         "legendFormat": "{{priority}}",
-                        "range": true
+                        "range": true,
+                        "exemplar": true
                       }
                     },
                     "refId": "A",
@@ -3560,7 +3591,7 @@
                         "height": 11,
                         "element": {
                           "kind": "ElementReference",
-                          "name": "panel-12"
+                          "name": "panel-13"
                         }
                       }
                     },
@@ -3573,7 +3604,7 @@
                         "height": 11,
                         "element": {
                           "kind": "ElementReference",
-                          "name": "panel-26"
+                          "name": "panel-29"
                         }
                       }
                     },
@@ -3586,7 +3617,7 @@
                         "height": 8,
                         "element": {
                           "kind": "ElementReference",
-                          "name": "panel-13"
+                          "name": "panel-12"
                         }
                       }
                     },
@@ -3599,7 +3630,7 @@
                         "height": 8,
                         "element": {
                           "kind": "ElementReference",
-                          "name": "panel-29"
+                          "name": "panel-26"
                         }
                       }
                     }

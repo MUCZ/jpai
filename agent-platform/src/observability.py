@@ -19,7 +19,7 @@ from opentelemetry.trace import Status, StatusCode
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics import MeterProvider, TraceBasedExemplarFilter
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
@@ -119,6 +119,7 @@ def init_observability() -> None:
     meter_provider = MeterProvider(
         resource=resource, 
         metric_readers=readers,
+        exemplar_filter=TraceBasedExemplarFilter(),
         views=[
             http_duration_view,
             task_duration_view,
