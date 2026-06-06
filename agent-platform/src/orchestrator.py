@@ -85,7 +85,7 @@ async def run_task(task_id: str, description: str,
         total_completion_tokens += summary.get("completion_tokens", 0)
 
         # Check if summary generation failed
-        if summary.get("error"):
+        if summary.get("error") and summary.get("text") is None:
             return TaskResult(
                 task_id=task_id, status=TaskStatus.FAILED,
                 tenant_id=tenant_id, priority=priority,
