@@ -79,18 +79,21 @@ def init_observability() -> None:
         )
         
     from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
+    
+    # Custom boundaries in seconds for task execution, queuing, LLM, and tool call latencies.
+    # We include fine-grained boundaries around the 30-second timeout threshold to avoid interpolation errors.
+    duration_boundaries = (
+        0.1, 0.5,0.8, 1.0, 1.2,1.5, 2.5, 5.0, 7.5, 10.0, 15.0, 20.0, 25.0, 29.0, 30.0, 31.0, 32.0, 33.0, 40.0, 50.0, 60.0,
+    )
+
     # Because http.server.duration is recorded in milliseconds by default, 
     # we convert these seconds into milliseconds.
     http_duration_view = View(
         instrument_name="http.server.duration",
         aggregation=ExplicitBucketHistogramAggregation(
-            boundaries=(100.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0, 29000.0, 30000.0, 31000.0, 32000.0, 40000.0, 45000.0, 60000.0)
+            boundaries=tuple(b * 1000.0 for b in duration_boundaries)
         ),
     )
-    
-    # Custom boundaries in seconds for task execution, queuing, LLM, and tool call latencies.
-    # We include fine-grained boundaries around the 30-second timeout threshold to avoid interpolation errors.
-    duration_boundaries = (0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.5, 5.0, 7.5, 10.0, 15.0, 20.0, 25.0, 28.0, 29.0, 30.0, 31.0, 32.0, 35.0, 40.0, 50.0, 60.0)
     
     task_duration_view = View(
         instrument_name="agent.task.duration",
