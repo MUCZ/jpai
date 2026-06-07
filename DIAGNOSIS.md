@@ -17,9 +17,19 @@ In the `Task Execution & Queues` Section of the metrics dashboard, we can find s
 - tasks of different priority have about the same task Timeout Rate 
 ![evidance](pic/issue1_evidence1.png)
 
-The system bottleneck is the backend IM rate limiting. In this scenario, it is restricted to a maximum of 5 requests(MAX_CONCURRENT_TASKS=5) Both evidences indicate that when the backend IM rate limiting is reached, we are not prioritizing their scheduling based on task priority.  Instead, we are scheduling them in an egalitarian manner, which has resulted in a uniform failure rate across the board.
+The system bottleneck is the backend LLM rate limiting. In this scenario, it is restricted to a maximum of 5 requests(MAX_CONCURRENT_TASKS=5) Both evidences indicate that when the backend IM rate limiting is reached, we are not prioritizing their scheduling based on task priority.  Instead, we are scheduling them in an egalitarian manner, which has resulted in a uniform failure rate across the board.
 
-## 3. Root Caude Analysis
+### 2.3 Trace & Log
+![trace of an request with `urgent` priority, trace_id = e36ecd6f22fa9f8c1c51a926ac0f7a37](pic/issue1_evidence2.png)
+![log of an request with `urgent` priority, trace_id = e36ecd6f22fa9f8c1c51a926ac0f7a37](pic/issue1_evidence3.png)
+
+Noticed that an urgent task occurring at this point: 2026-06-06 16:58:24.016 It then entered a wait period and eventually timed out.
+However, by searching the traces, we discovered that some lower-priority task was executed while the urgent task was still in the waiting phase.
+
+![While an urgent task was waiting, a low-priority task was processed.](pic/issue1_evidence4.png)
+
+
+## 3. Root Cause Analysis
 
 Although the API accepts the priority field, scheduling mechanisms like locks, semaphores, rate limiters, and caches treat all tasks identically using standard FIFO ordering. The `priority` field is not really used for queue scheduling.
 
@@ -37,11 +47,18 @@ Upgrade all task execution queues or locks in the pipeline to use priority-aware
 * Differentiated Timeouts and Retries
 Map the `Priority` enum to specific execution configurations. For example, assign aggressive retries (e.g., 5 attempts) and robust timeouts to urgent tasks, while giving low priority tasks fewer retries to conserve LLM API costs.
 
+
+Note that the current fix is still quite simple. In a production environment, we may need to consider a few additional issues:
+
+1. Distributed deployment: If all requests are distributed evenly across services, we can stick with the current design. However, if different instances carry different priorities, we might need to introduce a global, independent queue for task distribution instead of the current memory-based approach.
+
+2. We still lack an overload protection mechanism. Currently, all tasks are added to our message queue indiscriminately, even when the system is already under heavy load.  This will be discussed in detail in the later sections of this document.
+
 ## 6. Before-After Comparision
 See `FIX.md`
 
 ---
-# Issue 2. Unbounded in-memory state causes eventual OOM
+# Issue 2. Unbounded in-memory state causes eventual OOM, Data loss occurred because the state was not persisted.
 ## 1. Description
 The service stores task results and execution audit records in module-level memory with no cleanup policy. This means long-running processes accumulate data forever.
 
@@ -49,10 +66,13 @@ The service stores task results and execution audit records in module-level memo
 - `_response_cache` is a dict that never expiresicts any entries.
 - `_execution_log` stores prompts, responses, tool outputs, and timestamps for every successful task with no cap.
 
-## 2. Evidence
-![memory leak](pic/issue2_evidence1.png)
+Additionally, this critical data isn't being saved to a database or object storage, which means it gets lost whenever a container restarts.
+Furthermore, because we don't have centralized storage yet, task queries cannot be shared across different instances. **This essentially prevents the system from being deployed in a distributed manner.**
 
-## 3. Root Caude Analysis
+## 2. Evidence
+![memory increase](pic/issue2_evidence1.png)
+
+## 3. Root Cause Analysis
 The service keeps task results and audit records in module-level memory without TTL, size limits, or cleanup. Over time, task_store and _execution_log grow with traffic, causing unbounded memory usage.
 
 ## 4. Discovery Path
@@ -66,62 +86,26 @@ The service keeps task results and audit records in module-level memory without 
   Modify `_response_cache` into a LRU+TTL cache to limit the memory usage.
   Introduce a `sink` abstraction for `task_store` and `_execution_log` audit records. The service will publish records to bounded no-op sinks for now, while keeping the design ready for future Kafka, database, or observability pipeline exports.
 
+  Note that the above fix proposition is **still quite naive** For a production environment, we’ll likely need to do some more additional design and implementation.
+    1. In production, we likely want multiple agent service instances to share the same storage. To achieve this, we might replace the current in-memory cache with an independent KV store, such as Redis or a similar solution. Implementing a distributed cache this way would help achieve a higher cache hit rate.
+    2. We may also want to use RDS/MongoDB/Other Database to replace the current TaskStore and utilize Kafka/RabbitMQ/Other Message Queue to export these logs to a reliable storage system for subsequent auditing and statistical analysis.
+
 ## 6. Before-After Comparision
 See `FIX.md`
 
 ---
-# Issue 3 Timeout budgeting is inconsistent
-
+# Issue 3. Lacks a rate-limiting protection mechanism. 
 ## 1. Description
-    Under queueing or late-stage retries, the LLM client thinks budget remains even though the outer task is about to cancel. In other words, the service mistakenly assumes it has a longer timeout period than it actually does. This causes inaccurate error attribution and potential waste of internal or downstream resources after the client has already disconnected.
+The service currently accepts all incoming tasks indiscriminately and adds them to an memory queue, even when the system is operating at maximum capacity. In other words, the system accepts certain tasks that are almost guaranteed to time out. This will result in wasted resources, stability issues, and a poor experience for upstream callers. If the upstream strategy is configured with retry logic, it could potentially worsen the backlog. A **fail-fast strategy** is better choice.
 
 ## 2. Evidence
- traceID 5a630166a09a9047f2ab1f305fa46b40
- ![alt text](image.png)
- 还有就是，在一个极高超时率的情况下，我们这个 token 的表现
-不对，这个应该不是 token 的。这个主要就是说避免浪费，好像也是 token 的。
-也就是说，如果我们只剩一秒的话，就不应该去执行这个东西了 
 
-
-## 3. Root Caude Analysis
+## 3. Root Cause Analysis
+The scheduling mechanism does not enforce a maximum queue depth or dynamically evaluate the expected wait time. Consequently, during traffic spikes, the system continues to accept requests that mathematically cannot be completed within the TASK_TIMEOUT_SECONDS limit, resulting in severe resource contention, and a high timeout failure rate.
 
 ## 4. Discovery Path
-- Codex: Code Investigation
-    > Prompt: "The service is functional but has **several hidden issues** affecting reliability, performance, and cost efficiency. Find them"
-- Codex: Observability Dashboard Investigation(using grafana MCP)
-    > Prompt: "Explore the project observability dashboard/metrics/logs/traces to find any anomalies or patterns"
-- Human Confirmation
 
 ## 5. Fix Proposition
 
----
-# Issue 4. Cache can stampede and has an ambiguous key
-## 1. Description
-    src/main.py checks cache before scheduler acquisition, but there is no second cache check after queued same-key requests are admitted. Concurrent duplicates can run the full LLM pipeline one after another. Also src/main.py uses f"{tenant}:{description}", so values containing : can collide; use a tuple key or structured key.
-
-The request path performs cache lookup before acquiring the tenant lock, but it does not repeat the cache lookup after entering the serialized execution section. Concurrent requests for the same tenant and same task description can therefore miss together and then execute the full pipeline one after another.
-
-The first cache check happens before _guarded_execute() acquires the per-tenant lock.
-Once inside the lock, there is no second cache lookup.
-As a result, the first caller populates the cache, but the queued callers still continue with redundant LLM work.
-This is a classic missing double-checked-locking problem.
-## 2. Evidence
-这个就是找一个并发的请求，然后看一下日志and trace
-
-
-## 3. Root Caude Analysis
-
-## 4. Discovery Path
-- Codex: Code Investigation
-    > Prompt: "The service is functional but has **several hidden issues** affecting reliability, performance, and cost efficiency. Find them"
-- Codex: Observability Dashboard Investigation(using grafana MCP)
-    > Prompt: "Explore the project observability dashboard/metrics/logs/traces to find any anomalies or patterns"
-- Human Confirmation
-
-## 5. Fix Proposition
-
----
-# Issue 5. Tool calls are serialized even though they are independent
-    src/tool_executor.py awaits each tool one by one. The fixed search/database/ calculator calls could run concurrently and preserve result order with asyncio.gather, reducing task latency.
-
-看一下日志和 trace 注意这个时间点
+## 6. Before-After Comparision
+See `FIX.md`

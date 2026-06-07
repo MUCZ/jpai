@@ -1,3 +1,23 @@
+# 0. Project Overview
+## Instrumented Source Code 
+1. Modified version of code can be found at https://github.com/MUCZ/jpai
+
+* I've made this repository public so the deliverables and diff page are visible to you. **Please tell me if I need to delete it at any time.**
+
+2. See the diff here https://github.com/MUCZ/jpai/pull/1/changes
+
+## Key Deliverables 
+
+1. [Diagnosis Report](DIAGNOSIS.md)
+
+2. [Fix Report](FIX.md)
+
+3. Infrastructure Files: [Docker Compose](./agent-platform/docker-compose.yml) | [Other Config](./agent-platform/conf)
+
+4. [Production Deployment Instructions](Production_Deployment.md)
+
+5. [README.md with AI Tool Usage description (this file)](README.md)
+
 # 1. How to run the instrumented system
 
 ## Local Setup
@@ -15,68 +35,7 @@ This starts the following services:
 
 
 ## Production Setup
-
-### Dependencies
-The single-container `docker-otel-lgtm` is strictly for development and testing. For production, each component must be deployed independently.
-
-The most convenient method for deploying these components is to use the official Helm Chart to deploy an OpenTelemetry Operator, here's an simple installation example:
-```sh
-# Install OpenTelemetry Operator using helm
-helm install my-otel-operator open-telemetry/opentelemetry-operator 
-```
-
-#### 1. Data Collector
-
-* **Production Component:** OpenTelemetry Collector (recommended in K8s DaemonSet or Sidecar mode).
-* **Role:** Acts as a high-performance local proxy (Agent) to receive standard OTLP data pushed from applications. It then forwards the data to the backend, protecting apps from OOM risks caused by network jitter or backend crashes.
-
-#### 2. Grafana (Visualization & Alerting)
-
-* **Production Component:** Grafana (highly available multi-instance cluster) + external relational database (e.g., PostgreSQL).
-* **Role:** Shares metadata across instances, including dashboard configurations, user permissions, and alerts.
-
-#### 3. Loki (Log Storage)
-
-* **Production Component:** Grafana Loki (Distributed mode) + Object Storage (e.g., AWS S3, MinIO).
-* **Role:** Persists all raw log data and indices into highly reliable, cost-effective object storage.
-
-#### 4. Tempo (Distributed Tracing)
-
-* **Production Component:** Grafana Tempo (Distributed mode) + Object Storage (e.g., AWS S3).
-* **Role:** Saves trace snapshots directly into object storage.
-
-#### 5. Prometheus (Metrics Storage)
-
-* **Production Component:** Grafana Mimir or a Prometheus cluster (integrated with Thanos / Cortex) + Object Storage.
-* **Role:** Provides multi-tenant, long-term, and highly available metrics storage for Prometheus, offloading historical data to object storage.
-
-### Configurations
-When deploying to the production environment, the following environment variables should be configured correctly.
-
-1. Core Dependencies & Environment
-
-| Environment Variable | Default Value | Brief Description |
-| :--- | :--- | :--- |
-| **`LLM_SERVER_URL`** | `"http://mock-llm:8081"` | The base URL endpoint for the downstream LLM inference service. |
-| **`DEPLOYMENT_ENV`** | `"development"` | Indicates the current deployment environment (e.g., `production`, `staging`). |
-| **`SERVICE_VERSION`** | `"dev"` | The version of the deployed service (e.g., git commit hash). |
-
-2. Application Behavior & Caching
-
-| Environment Variable | Default Value | Brief Description |
-| :--- | :--- | :--- |
-| **`RESPONSE_CACHE_MAX_ENTRIES`** | `256` | Maximum number of entries retained in the local deduplication response cache. |
-| **`RESPONSE_CACHE_TTL_SECONDS`** | `300` | Time-to-live (in seconds) for each cached LLM/Task response before it expires. |
-
-3. Observability & Telemetry (OpenTelemetry)
-
-| Environment Variable | Default Value | Brief Description |
-| :--- | :--- | :--- |
-| **`LOG_LEVEL`** | `"DEBUG"` | Application logging verbosity (e.g., `DEBUG`, `INFO`, `WARNING`, `ERROR`). |
-| **`OTEL_SERVICE_NAME`** | `"agent-service"` | The logical service name reported to OpenTelemetry. |
-| **`OTEL_EXPORTER_OTLP_ENDPOINT`** | `None` | The OTLP endpoint (e.g., Jaeger or Collector) where metrics, logs, and traces are exported. |
-| **`METRICS_TENANT_LABEL_MODE`** | `"direct"` | Controls tenant metric cardinality: `"direct"` logs raw IDs, while bucketed hashes them. |
-| **`METRICS_TENANT_BUCKET_COUNT`** | `64` | Number of metric buckets used when `METRICS_TENANT_LABEL_MODE` is set to bucketed. |
+See Production_Deployment.md
 
 
 # 2. How to reproduce the load test
@@ -310,3 +269,18 @@ At this stage, we also use agents to verify whether the fixes are effective.
 
 # Any cases where AI gave incorrect results and how you caught and handled them 
 TODO
+问题1 
+
+情况1 
+1. 在修改优先级队列问题的时候，他引入了两个阶段的变动：
+
+1. 第一次修改：他擅自引入了一个针对每个租户的队列。但在实现限流时，只在全局队列里做了处理，而没有在分租户的队列中实现。这导致第一次的修改是无效的。
+
+2. 第二次修改：他在全局和每个租户的队列里都实现了优先队列。但随后产生了一个隐藏的队列堆积问题，导致服务在刚开始运行正常，但随着时间推移，堆积问题会导致吞吐量逐渐收缩为 0，最终所有任务都会失败。
+核心原因是我们为了保证每个租户在同一时间只有一个任务在运行，引入了一个状态标志。但在任务超时时，这个状态标志没有被及时更新，导致产生了脏数据。
+
+问题2:
+
+情况2:
+缓存 Key里是不应该有优先级的,  In a certain version, the Agent unilaterally added a priority field to the cache key. This prevented requests with different priorities from sharing the same cache, which ultimately led to a lower cache hit rate for the system.
+
