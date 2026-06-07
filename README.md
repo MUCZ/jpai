@@ -35,7 +35,7 @@ This starts the following services:
 
 
 ## Production Setup
-See Production_Deployment.md
+See [Production_Deployment.md](DEPLOYMENT.md)
 
 
 # 2. How to reproduce the load test
