@@ -1,4 +1,4 @@
-# Issue 1. The exposed `priority` field is not working 
+# Issue 1. The exposed `priority` field is not working [FIXED]
 
 ## 1. Description
 The API accepts `urgent`, `normal`, and `low`, but `priority` is not used to influence scheduling, timeout policy, retry policy, queue order, or cache segmentation.
@@ -58,7 +58,7 @@ Note that the current fix is still quite simple. In a production environment, we
 See [FIX.md](FIX.md)
 
 ---
-# Issue 2. Unbounded in-memory state causes eventual OOM, Data loss occurred because the state was not persisted.
+# Issue 2. Unbounded in-memory state causes eventual OOM, Data loss occurred because the state was not persisted. [FIXED]
 ## 1. Description
 The service stores task results and execution audit records in module-level memory with no cleanup policy. This means long-running processes accumulate data forever.
 
@@ -99,13 +99,90 @@ See [FIX.md](FIX.md)
 The service currently accepts all incoming tasks indiscriminately and adds them to an memory queue, even when the system is operating at maximum capacity. In other words, the system accepts certain tasks that are almost guaranteed to time out. This will result in wasted resources, stability issues, and a poor experience for upstream callers. If the upstream strategy is configured with retry logic, it could potentially worsen the backlog. A **fail-fast strategy** is better choice.
 
 ## 2. Evidence
+For requests that clearly exceed the system's capacity, most end up in a timeout state, which leads to a certain amount of resource waste, Moreover, it forces the client to maintain a connection that is destined to fail for an extended period, which leads to a poor user experience and poor system stability.
+While the system is still able to normally process requests within its designated range, tasks continue to pile up in memory. Despite this, the overall failure rate remains at a very low level.
+
+### 2.1 Code 
+By exploring the code with the Agent, we can see that the current queue is an unbounded, memory-based structure. Consequently, we don't reject any requests based on capacity. We can therefore infer that the system won't deny any incoming requests due to current capacity limits; instead, these requests will simply time out naturally.
+
+### 2.2 Load Test 
+Enhance our stress testing script to track the success and failure rates across different levels of concurrency. Each test runs for 5 minutes. 
+```sh
+    for c in 30 50 100 250 500 1000; do
+        python -m tests.test_load --minutes 10 --tenant 5 --concurrency "$c" --output "report/${c}.json"
+        sleep 300
+    done
+```
+
+### 2.2.1 Load Test Report
+Based on the stress test report, it is clear that as the volume of requests increases, we are exceeding the system's load capacity. Most of these requests are bound to time out. 
+In this situation, our system should proactively and selectively disconnect incoming requests to avoid wasting resources on unnecessary waiting and connections. Furthermore, this mechanism will allow us to implement fallback strategies later on.
+
+>  Ideally, we should prefer use existing open-source load testing tools like [k6](https://k6.io/) rather than our own custom Python scripts. The load testing scripts and the service under test should be deployed on separate machines to avoid any potential interference.
+![Load test report: Throughput Completed](pic/issue3_evidence4.png)
+![Load test report: Status Breakdown](pic/issue3_evidence5.png)
+![Load test report: Request Latency](pic/issue3_evidence6.png)
+
+System throughput initially increases along with the concurrency. However, the failure rate also continues to rise during this time. It's because our backend LLM is our main bottleneck. 
+
+When system capacity is exceeded, requests stack up in the memory queue and inevitably time out, forcing clients to hold connections unnecessarily. Consequently, the backend LLM wastes valuable computing resources processing these already-expired tasks instead of handling viable new ones.
+
+Implementing a fail-fast admission control layer (returning 429) would protect system stability and ensure that available capacity is dedicated to requests that can successfully complete.
+
+### 2.2.2 Metrics
+![Metrics during the load test](pic/issue3_evidence1.png)
+![Metrics during the load test - Failure Rate](pic/issue3_evidence2.png)
+![System resources increasing while throughput isn't effectively improving](pic/issue3_evidence7.png)
+
+### 2.2.3 Traces
+![A typical case of a timeout.](pic/issue3_evidence3.png)
 
 ## 3. Root Cause Analysis
 The scheduling mechanism does not enforce a maximum queue depth or dynamically evaluate the expected wait time. Consequently, during traffic spikes, the system continues to accept requests that mathematically cannot be completed within the TASK_TIMEOUT_SECONDS limit, resulting in severe resource contention, and a high timeout failure rate.
 
 ## 4. Discovery Path
+Run extended stress tests that significantly exceed the system's current load capacity. Before running the test, we first need to refactor our script to support a high enough level of concurrency. Otherwise, limitations within the system or networking libraries will prevent it from generating sufficient load for the stress test.
+```python
+python -m tests.test_load --requests 2000 --tenant 5 --concurrency 1000
+```
+Then combine with various agent-based research methods mentioned above to pinpoint the root cause. We also collect data by conducting pressure tests at a finer granularity.
 
 ## 5. Fix Proposition
+**Summary**
+
+ Introduce an admission control layer before tasks enter the in-memory priority scheduler. The
+  service should no longer accept every cache-miss request blindly. Instead, it should estimate
+
+**Core Approach**
+
+ The key idea is capacity-based rejection.
+
+  Before accepting a new task, the service estimates current available capacity using feedback
+  from the running system: 
+
+  - current number of running tasks
+  - current queue length
+  - recent task execution latency
+  - configured concurrency limit
+  - request priority
+
+  Based on these signals, the service estimates the expected queueing delay for the new
+  request. If the estimated delay is already too high, the request should not be admitted.
+
+**Implementation Direction**
+
+  Add admission control after cache lookup and before creating a pending task.
+  Expected behavior:
+  - Cache hits are still returned immediately.
+  - Cache misses go through capacity evaluation.
+  - Requests within capacity enter _PriorityTaskScheduler.
+  - Requests beyond capacity return 429.
+  - Rejected requests are not written as pending tasks.
+  - Rejected requests are not counted as admitted task failures.
+
+  The capacity model should be dynamic rather than purely static. A simple feedback-control
+  model is enough for v1: use recent task latency and current backlog to estimate whether
+  accepting more work would likely cause timeout or severe queueing.
 
 ## 6. Before-After Comparision
-See [FIX.md](FIX.md)
+Due to time constraints, this issue has not been fixed.
