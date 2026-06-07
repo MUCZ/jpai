@@ -1,4 +1,4 @@
-# How to run the instrumented system
+# 1. How to run the instrumented system
 
 ## Local Setup
 Use Docker for the standard local setup:
@@ -79,13 +79,13 @@ When deploying to the production environment, the following environment variable
 | **`METRICS_TENANT_BUCKET_COUNT`** | `64` | Number of metric buckets used when `METRICS_TENANT_LABEL_MODE` is set to bucketed. |
 
 
-# How to reproduce the load test
+# 2. How to reproduce the load test
 
 ```bash
 python -m tests.test_load --tenants 3 --requests 100 --concurrency 30
 ```
 
-# How to view traces/metrics/logs
+# 3. How to view traces/metrics/logs
 
 ## Metrics
 1. Open Grafana at `http://localhost:3000/dashboards`. if dashboard is not visible, please choose `Dashboards` from left sidebar menu
@@ -129,7 +129,7 @@ python -m tests.test_load --tenants 3 --requests 100 --concurrency 30
 ![query traces from metrics](pic/metrics2trace.gif)
 
 
-# Brief explanation of your observability design choices
+# 4. Brief explanation of your observability design choices
 
 ## Observability Stack
 Ignoring performance profiling, here are our observability stack decisions:
@@ -226,7 +226,7 @@ Though we cannot claim that the OTLP ecosystem outperforms traditional, speciali
 
 * Choosing OpenTelemetry for tracing is an absolute no-brainer. Given that legacy alternatives like `jaeger-client` are deprecated, OpenTelemetry stands as the industry standard. The initialization complexity is easily mitigated by standardizing configuration patterns with our AI tools.
 
-# AI Tool Usage 
+# 5. AI Tool Usage 
 
 ## Which AI tools you used and for what tasks
 Primary agent: **Codex**
@@ -235,11 +235,13 @@ Primary agent: **Codex**
 Secondary agents: Claude Code & Antigravity
 * Used for plan review, code review, and also issue investigation.
 
+The web version of Gemini is also used for quick ad-hoc searches and doc refinement.
+
 ##  How you directed/orchestrated them — what worked well, what didn't
 
 ### Task 1: Implementing the Observability Stack
 
-Programming agents are used in the following areas:
+Coding agents are used in the following areas:
 
 * **Tech Stack Selection:** Discussed options with multiple agents to finalize the stack.
 * **Development Planning:** Codex drafted the initial plan; Cloud Code and Anti-gravity reviewed it. Iterated via feedback loops with human oversight for the final plan.
@@ -249,12 +251,12 @@ Programming agents are used in the following areas:
 * **Issue Fixing:** The agent fixes the identified observability-related issues in the codebase.
 
 ### Task 2: System Issue Identification
-We use two different approaches here:
+We use coding agents using two different approaches here:
 
-1. Static code inference and deduction
+1. Static code inference and analysis
  Three agents audited the codebase. They cross-reviewed each other's findings to generate a complete issue list. Next, humans handles the filtering and sorting.
 
-2. Runtime data analysis, which includes observational data from our actual observability data storage(logs/metrics/traces). We expose this data to the agents via Grafana's MCP server, allowing them to perform investigation and analysis.
+2. Runtime data analysis, which utilizes observational data from our actual observability data storage(logs/metrics/traces). We expose this data to the agents via Grafana's MCP server, allowing them to perform autonomous investigation, analysis and close-loop fix validation.
 
 ### Task 3: Issue Fixing
 
@@ -263,44 +265,48 @@ A lead agent proposed a fix $\rightarrow$ the other two agents reviewed it with 
 
 During reviews, Apart from correctness. we alo focused on Minimizing technical debt and Maximizing code reuse to ensure a clean and elegant architecture.
 
+At this stage, we also use agents to verify whether the fixes are effective.
+
 ## What Worked Well
 
 * **Fast Code Comprehension:** AI agents understand codebases incredibly fast. They excel at single-function development and localized testing.
-* **Efficient Auditing:** Highly effective at researching current system status and delivering reports for specific, simple tasks.
-* **Streamlined Maintenance:** Fast at code/proposal reviews, minor refactoring, documentation, running tests, and fixing small bugs.
+* **Efficient Retrieval:** Highly effective at researching current system status and delivering reports for specific, simple tasks.
+* **Streamlined Coding:** Fast at code/proposal reviews, minor refactoring, documentation, running tests, and fixing small bugs. Generally, a Coding Agent can complete the entire process in a closed loop. It is very important that this is completed autonomously. For example, it can verify code accuracy through unit tests and use Grafana dashboard data, logs and trace to validate correctness over long-term operations.
 * **Grafana Configuration Generation:** Successfully generated all Grafana queries, dashboard layouts, and configuration JSON.
-* **Observability Data Understanding:** Thanks to the open sourced MCP service `grafana/mcp-grafana`. The agent can access observability metrics/log/traces from the runtime environment.
+* **Observability Data Understanding & Root Cause Analysis:** Thanks to the open sourced MCP service `grafana/mcp-grafana`. The agent can access observability metrics/log/traces from the runtime environment. This helps us quickly understand objective property information or pinpoint issues.
+
 
 ## What Didn't Work Well
 
-* **Granularity Mismatch**
+* **Granularity Mismatch Pitall**
 
     The AI overcomplicates simple problems and oversimplifies complex ones. Humans must correctly scope task boundaries.
     > **Example:** Asking it to "implement an observability stack" without an upfront plan led to messy, scattered logic. We had to force it to agree on a specific plan first, then implement it step-by-step.
 
-* **Over-Engineering & Low Reuse**
+* **Over-Engineering & Low Reuse Pitfall**
 
     The AI tends to reinvent the wheel rather than using existing code, causing codebase bloat.
-    > **Example:** An agent manually wrote custom HTTP middleware to inject metrics, completely missing that the framework already provided this natively.
+    > **Example:** An agent manually wrote custom HTTP middleware to inject metrics, completely missing that the framework already provided this natively. Another scenario is that Agent tends to use two different solutions for two similar scenarios.
 
 * **Scope Creep**
 
     Agents occasionally fixed unrequested problems or added extra features. 
+    > **Example:** When asked to improve an observability feature, the agent unilaterally added a global rate limiter claimed to optimize system robustness.
 
 * **Context Recall Failures**
 
-    Missing key project details led to small bugs:
+    Missing key details led to small bugs:
 
     > **Example:**
     > * Architecture Misalignment:
         Forgot we only used OTLP Push. The initial plan mixed Push and Pull, doubling our metric volume.
     > * Dashboard Breakage:
         Overlooked existing PromQL queries during fixes, causing original metrics to be lost.
-    > * Inaccurate Telemetry  :
+    > * Inaccurate Telemetry / PromQL:
         Introduced timing bugs (incorrect timestamp logic).
     > * Broken Bindings:
         Failed to correctly link logs, traces, and metrics together.
 
 
-# Any cases where AI gave incorrect results and how you caught and handled them
+# Any cases where AI gave incorrect results and how you caught and handled them 
 TODO
