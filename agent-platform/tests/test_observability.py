@@ -19,6 +19,7 @@ from prometheus_client.parser import text_string_to_metric_families
 from src import llm_client, main, orchestrator
 from src.models import Priority
 from src.observability import metric_tenant_label
+from src.sinks import NoopBoundedSink
 
 
 class _FakeTracerProvider:
@@ -54,8 +55,9 @@ class _FakeAsyncClient:
 class ObservabilityTests(unittest.TestCase):
     def setUp(self) -> None:
         import structlog
-        main.task_store.clear()
+        main.task_result_sink.clear()
         main._response_cache.clear()
+        orchestrator.execution_audit_sink.clear()
         main._task_scheduler = main._PriorityTaskScheduler(main.MAX_CONCURRENT_TASKS)
         self.client = TestClient(main.app)
         self.log_stream = io.StringIO()
@@ -463,6 +465,51 @@ class ObservabilityTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
 
         self.assertEqual(len(main._response_cache), 2)
+
+    def test_noop_bounded_sink_drops_oldest_records(self) -> None:
+        sink = NoopBoundedSink(max_entries=2)
+
+        sink.publish({"id": "first"})
+        sink.publish({"id": "second"})
+        sink.publish({"id": "third"})
+
+        self.assertEqual(sink.snapshot(), [{"id": "second"}, {"id": "third"}])
+
+    def test_task_result_sink_is_bounded_for_recent_lookup(self) -> None:
+        bounded_sink = NoopBoundedSink(max_entries=2)
+        with self._mock_orchestrator(), patch.object(main, "task_result_sink", bounded_sink):
+            for idx in range(3):
+                response = self.client.post(
+                    "/tasks",
+                    json={
+                        "task_description": f"task-store-{idx}",
+                        "tenant_id": "tenant-store-bound",
+                        "priority": "normal",
+                    },
+                )
+                self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(len(bounded_sink), 2)
+
+    def test_task_result_and_audit_records_are_published_to_sinks(self) -> None:
+        with self._mock_orchestrator():
+            response = self.client.post(
+                "/tasks",
+                json={
+                    "task_description": "Export this task",
+                    "tenant_id": "tenant-export",
+                    "priority": "normal",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(main.task_result_sink), 1)
+        self.assertEqual(len(orchestrator.execution_audit_sink), 1)
+        self.assertEqual(main.task_result_sink.snapshot()[0].tenant_id, "tenant-export")
+        self.assertEqual(
+            orchestrator.execution_audit_sink.snapshot()[0]["tenant_id"],
+            "tenant-export",
+        )
 
     def test_setup_tracing_configures_otlp_exporter_when_endpoint_is_set(self) -> None:
         from src import observability

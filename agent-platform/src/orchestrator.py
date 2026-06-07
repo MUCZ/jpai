@@ -13,12 +13,12 @@ import traceback
 from src.llm_client import call_llm
 from src.tool_executor import execute_tools
 from src.models import TaskResult, TaskStatus, Priority
-from src.config import LLM_SERVER_URL
+from src.config import EXECUTION_AUDIT_SINK_MAX_ENTRIES, LLM_SERVER_URL
 from src.observability import observe_stage
+from src.sinks import NoopBoundedSink
 
 
-# Execution audit trail for debugging and compliance review
-_execution_log: list[dict] = []
+execution_audit_sink = NoopBoundedSink(EXECUTION_AUDIT_SINK_MAX_ENTRIES)
 logger = structlog.get_logger(__name__)
 
 
@@ -125,8 +125,7 @@ async def run_task(task_id: str, description: str,
                 created_at=created, completed_at=time.time(),
             )
 
-        # Record execution details for audit trail
-        _execution_log.append({
+        execution_audit_sink.publish({
             "task_id": task_id,
             "tenant_id": tenant_id,
             "description": description,

@@ -187,7 +187,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.95, sum(rate(agent_task_stage_duration_seconds_bucket[60s])) by (le, stage))",
+                        "expr": "histogram_quantile(0.95, sum(rate(agent_task_stage_duration_seconds_bucket[5m])) by (le, stage))",
                         "legendFormat": "__auto",
                         "range": true,
                         "exemplar": true
@@ -901,7 +901,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.99, sum(rate(agent_llm_request_duration_seconds_bucket[60s])) by (le))",
+                        "expr": "histogram_quantile(0.99, sum(rate(agent_llm_request_duration_seconds_bucket[5m])) by (le))",
                         "legendFormat": "__auto",
                         "range": true,
                         "exemplar": true
@@ -1496,7 +1496,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "sum(rate(agent_tasks_total{status=\"completed\"}[60s])) / sum(rate(agent_tasks_total[60s])) * 100",
+                        "expr": "sum(rate(agent_tasks_total{status=\"completed\"}[5m])) / sum(rate(agent_tasks_total[5m])) * 100",
                         "legendFormat": "__auto",
                         "range": true,
                         "exemplar": true
@@ -1581,7 +1581,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "sum(rate(agent_cache_operations_total{result=\"hit\"}[60s])) / sum(rate(agent_cache_operations_total[60s])) * 100",
+                        "expr": "sum(rate(agent_cache_operations_total{result=\"hit\"}[5m])) / sum(rate(agent_cache_operations_total[5m])) * 100",
                         "legendFormat": "__auto",
                         "range": true,
                         "exemplar": true
@@ -2296,7 +2296,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "sum(increase(agent_llm_cost_usd_USD_total[60s])) by (operation)\n",
+                        "expr": "sum(increase(agent_llm_cost_usd_USD_total[5m])) by (operation)\n",
                         "legendFormat": "__auto",
                         "range": true,
                         "exemplar": true
@@ -2637,7 +2637,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.5, sum(rate(http_server_duration_milliseconds_bucket[60s])) by (le)) / 1000",
+                        "expr": "histogram_quantile(0.5, sum(rate(http_server_duration_milliseconds_bucket[5m])) by (le)) / 1000",
                         "legendFormat": "P50",
                         "range": true,
                         "exemplar": true
@@ -2659,7 +2659,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.9, sum(rate(http_server_duration_milliseconds_bucket[60s])) by (le)) / 1000",
+                        "expr": "histogram_quantile(0.9, sum(rate(http_server_duration_milliseconds_bucket[5m])) by (le)) / 1000",
                         "legendFormat": "P90",
                         "range": true,
                         "exemplar": true
@@ -2681,7 +2681,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.99, sum(rate(http_server_duration_milliseconds_bucket[60s])) by (le)) / 1000",
+                        "expr": "histogram_quantile(0.99, sum(rate(http_server_duration_milliseconds_bucket[5m])) by (le)) / 1000",
                         "legendFormat": "P99",
                         "range": true,
                         "exemplar": true
@@ -2919,7 +2919,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.99, sum(rate(agent_task_duration_seconds_bucket[60s])) by (le, priority))",
+                        "expr": "histogram_quantile(0.99, sum(rate(agent_task_duration_seconds_bucket[5m])) by (le, priority))",
                         "legendFormat": "{{priority}}",
                         "range": true,
                         "exemplar": true
@@ -3038,7 +3038,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.90, sum(rate(agent_task_duration_seconds_bucket[60s])) by (le, priority))",
+                        "expr": "histogram_quantile(0.90, sum(rate(agent_task_duration_seconds_bucket[5m])) by (le, priority))",
                         "legendFormat": "{{priority}}",
                         "range": true,
                         "exemplar": true
@@ -3157,7 +3157,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "histogram_quantile(0.50, sum(rate(agent_task_duration_seconds_bucket[60s])) by (le, priority))",
+                        "expr": "histogram_quantile(0.50, sum(rate(agent_task_duration_seconds_bucket[5m])) by (le, priority))",
                         "legendFormat": "{{priority}}",
                         "range": true,
                         "exemplar": true

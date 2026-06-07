@@ -23,6 +23,7 @@ from src.config import (
     PRIORITY_POLICIES,
     RESPONSE_CACHE_MAX_ENTRIES,
     RESPONSE_CACHE_TTL_SECONDS,
+    TASK_RESULT_SINK_MAX_ENTRIES,
     TASK_TIMEOUT_SECONDS,
 )
 from src.observability import (
@@ -41,6 +42,7 @@ from src.observability import (
     render_metrics,
     update_trace_context,
 )
+from src.sinks import NoopBoundedSink
 
 app = FastAPI(title="Agent Execution Service")
 init_observability()
@@ -48,8 +50,9 @@ init_observability()
 logger = structlog.get_logger(__name__)
 tracer = get_tracer()
 
-# Task storage
-task_store: dict[str, TaskResult] = {}
+# Bounded task result sink. It is a no-op exporter today, but this is the
+# boundary where Kafka, a database, or an observability pipeline can be added.
+task_result_sink = NoopBoundedSink(TASK_RESULT_SINK_MAX_ENTRIES)
 
 # Response cache for repeated queries — avoids redundant LLM calls
 _response_cache: OrderedDict[str, dict] = OrderedDict()
@@ -222,6 +225,17 @@ def _cache_set(cache_key: str, result: str) -> None:
         CACHE_ENTRIES.add(-1)
 
 
+def _store_task_result(result: TaskResult) -> None:
+    task_result_sink.publish(result, key=result.task_id)
+
+
+def _mark_task_running(task_id: str) -> None:
+    result = task_result_sink.get(task_id)
+    if isinstance(result, TaskResult):
+        result.status = TaskStatus.RUNNING
+        task_result_sink.publish(result, key=task_id)
+
+
 def _record_task_metrics(
     tenant: str,
     priority: str,
@@ -328,7 +342,7 @@ async def create_task(body: CreateTaskBody):
                 created_at=time.time(),
                 completed_at=time.time(),
             )
-            task_store[task_id] = result
+            _store_task_result(result)
             span.add_event("task.cache_hit")
             _record_task_metrics(
                 metric_tenant,
@@ -343,12 +357,13 @@ async def create_task(body: CreateTaskBody):
             )
             return _to_response(result)
 
-        task_store[task_id] = TaskResult(
+        pending_result = TaskResult(
             task_id=task_id,
             status=TaskStatus.PENDING,
             tenant_id=body.tenant_id,
             priority=body.priority,
         )
+        _store_task_result(pending_result)
         span.add_event("task.cache_miss")
 
         async def _guarded_execute():
@@ -386,7 +401,7 @@ async def create_task(body: CreateTaskBody):
                 TASK_IN_PROGRESS.add(
                     1, {"tenant_id": metric_tenant, "priority": body.priority.value}
                 )
-                task_store[task_id].status = TaskStatus.RUNNING
+                _mark_task_running(task_id)
                 return await run_task(
                     task_id=task_id,
                     description=body.task_description,
@@ -427,7 +442,7 @@ async def create_task(body: CreateTaskBody):
                 task_description=body.task_description[:200],
             )
 
-        task_store[task_id] = result
+        _store_task_result(result)
         source = "fresh"
         _record_task_metrics(
             metric_tenant,
@@ -451,9 +466,9 @@ async def create_task(body: CreateTaskBody):
 
 @app.get("/tasks/{task_id}", response_model=TaskResponse)
 async def get_task(task_id: str):
-    if task_id not in task_store:
+    result = task_result_sink.get(task_id)
+    if not isinstance(result, TaskResult):
         raise HTTPException(status_code=404, detail="Task not found")
-    result = task_store[task_id]
     with bind_context(
         task_id=task_id,
         tenant_id=result.tenant_id,
