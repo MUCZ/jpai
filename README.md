@@ -196,7 +196,7 @@ Secondary agents: Claude Code & Antigravity
 
 The web version of Gemini is also used for quick ad-hoc searches and doc refinement.
 
-##  How you directed/orchestrated them — what worked well, what didn't
+## How you directed/orchestrated them — what worked well, what didn't
 
 ### Task 1: Implementing the Observability Stack
 
@@ -267,20 +267,41 @@ At this stage, we also use agents to verify whether the fixes are effective.
         Failed to correctly link logs, traces, and metrics together.
 
 
-# Any cases where AI gave incorrect results and how you caught and handled them 
-TODO
-问题1 
+# 6. Any cases where AI gave incorrect results and how you caught and handled them 
+## Problem 1
 
-情况1 
-1. 在修改优先级队列问题的时候，他引入了两个阶段的变动：
+### Scenario 1: Priority Queue Modification Issues
+The refactoring of the priority queue introduced issues across two distinct phases:
+* **Phase 1 (Ineffective Change):** Tenant-specific queues were introduced without proper alignment. While rate limiting was applied to the global queue, it was omitted from the tenant-specific queues, rendering the modification ineffective.
+* **Phase 2 (Throughput Degradation):** Priority queues were implemented at both the global and tenant levels. This triggered a hidden queue backlog issue: the service initially operated normally, but throughput gradually degraded to zero over time, eventually causing all tasks to fail.
+* **Root Cause:** To enforce a strict concurrency limit of one active task per tenant, a state flag was introduced. However, this flag failed to reset upon task timeout, resulting in stale data. The system falsely assumed the tenant still had a running task because the timeout failed to clear the occupancy placeholder back to `0`.
 
-1. 第一次修改：他擅自引入了一个针对每个租户的队列。但在实现限流时，只在全局队列里做了处理，而没有在分租户的队列中实现。这导致第一次的修改是无效的。
+### Detection
+* Executed extended stress testing while monitoring the system metrics dashboard.
+* Leveraged an AI Agent to analyze the metrics alongside the codebase to isolate the root cause.
 
-2. 第二次修改：他在全局和每个租户的队列里都实现了优先队列。但随后产生了一个隐藏的队列堆积问题，导致服务在刚开始运行正常，但随着时间推移，堆积问题会导致吞吐量逐渐收缩为 0，最终所有任务都会失败。
-核心原因是我们为了保证每个租户在同一时间只有一个任务在运行，引入了一个状态标志。但在任务超时时，这个状态标志没有被及时更新，导致产生了脏数据。
+### Resolution
+* Passed the issue details to the Agent to automate the fix. The detailed remediation workflow is documented in **Section 5**.
 
-问题2:
 
-情况2:
-缓存 Key里是不应该有优先级的,  In a certain version, the Agent unilaterally added a priority field to the cache key. This prevented requests with different priorities from sharing the same cache, which ultimately led to a lower cache hit rate for the system.
+## Problem 2
 
+### Scenario 2: Priority Field in Cache Key
+
+Cache keys should structurally exclude task priority. In a specific version, the Agent unilaterally introduced a priority field into the cache key design. This architectural error prevented requests with different priorities from sharing the same cached data, ultimately driving down the system's overall cache hit rate.
+
+### Detection
+
+* Monitored the system metrics dashboard during testing and observed an anomalous drop in cache hit rates.
+* Leveraged the Agent to analyze performance metrics and audit the codebase to pinpoint the incorrect cache key formulation.
+
+### Resolution
+
+* Passed the issue details to the Agent to remove the priority field from the cache key and restore correct cache sharing. The detailed remediation workflow is documented in **Section 5**.
+
+## Reflection & Learning
+The Agent had too much autonomy and lacked the big-picture view. It focused on quick, localized fixes while completely missing systemic impacts—leading to forgotten timeout handlers and broken cache sharing.
+
+To keep the Agent on the right track, tightening the workflow:
+- Plan Before Code: Force the Agent to output a detailed step-by-step plan first. We review and approve the logic before letting it touch any code.
+- Enforce Strict Checklists: Add automated rules and verification steps in the pipeline to double-check edge cases (like error handling and cache keys) before submission.
