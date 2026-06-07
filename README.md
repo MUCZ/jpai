@@ -1,10 +1,10 @@
 # 0. Project Overview
 ## Instrumented Source Code 
-1. Modified version of code can be found at https://github.com/MUCZ/jpai
+1. Modified version of code can be found at this repo https://github.com/MUCZ/jpai
 
 * I've made this repository public so the deliverables and diff page are visible to you. **Please tell me if I need to delete it at any time.**
 
-2. See the diff here https://github.com/MUCZ/jpai/pull/1/changes
+2. See the **diff** here https://github.com/MUCZ/jpai/pull/1/changes
 
 ## Key Deliverables 
 
