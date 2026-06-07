@@ -225,6 +225,9 @@ TASK_TIMEOUTS_TOTAL = _meter.create_counter(
 TASK_IN_PROGRESS = _meter.create_up_down_counter(
     "agent.task.in_progress", unit="1", description="Tasks currently executing"
 )
+TASK_QUEUE_DEPTH = _meter.create_up_down_counter(
+    "agent.task.queue.depth", unit="1", description="Tasks waiting in queue"
+)
 TASK_QUEUE_WAIT = _meter.create_histogram(
     "agent.task.queue.wait", unit="s", description="Queue wait time"
 )

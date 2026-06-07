@@ -31,6 +31,7 @@ from src.observability import (
     CACHE_OPERATIONS_TOTAL,
     TASK_DURATION,
     TASK_IN_PROGRESS,
+    TASK_QUEUE_DEPTH,
     TASK_QUEUE_WAIT,
     TASKS_TOTAL,
     TASK_TIMEOUTS_TOTAL,
@@ -84,7 +85,7 @@ class _PriorityTaskScheduler:
         self._running = 0
         self._active_tenants: set[str] = set()
         self._active_slots: dict[int, str] = {}
-        self._waiters: list[tuple[int, int, str, asyncio.Future[int]]] = []
+        self._waiters: list[tuple[int, int, str, str, asyncio.Future[int]]] = []
         self._sequence = itertools.count()
         self._slot_sequence = itertools.count()
         self._lock = asyncio.Lock()
@@ -94,8 +95,15 @@ class _PriorityTaskScheduler:
         async with self._lock:
             heapq.heappush(
                 self._waiters,
-                (_priority_rank(priority), next(self._sequence), tenant_id, waiter),
+                (
+                    _priority_rank(priority),
+                    next(self._sequence),
+                    tenant_id,
+                    priority.value,
+                    waiter,
+                ),
             )
+            _record_queue_depth_delta(priority.value, 1)
             self._wake_waiters_locked()
 
         try:
@@ -125,8 +133,9 @@ class _PriorityTaskScheduler:
             next_index = self._next_runnable_index_locked()
             if next_index is None:
                 return
-            _, _, tenant_id, waiter = self._waiters.pop(next_index)
+            _, _, tenant_id, priority_value, waiter = self._waiters.pop(next_index)
             heapq.heapify(self._waiters)
+            _record_queue_depth_delta(priority_value, -1)
             slot_id = next(self._slot_sequence)
             self._running += 1
             self._active_tenants.add(tenant_id)
@@ -141,9 +150,12 @@ class _PriorityTaskScheduler:
             self._active_tenants.discard(tenant_id)
 
     def _prune_waiters_locked(self) -> None:
-        retained_waiters = [
-            item for item in self._waiters if not item[3].done()
-        ]
+        retained_waiters = []
+        for item in self._waiters:
+            if item[4].done():
+                _record_queue_depth_delta(item[3], -1)
+                continue
+            retained_waiters.append(item)
         if len(retained_waiters) != len(self._waiters):
             self._waiters = retained_waiters
             heapq.heapify(self._waiters)
@@ -153,7 +165,7 @@ class _PriorityTaskScheduler:
         best_index = None
         best_item = None
         for index, item in enumerate(self._waiters):
-            _, _, tenant_id, waiter = item
+            _, _, tenant_id, _, waiter = item
             if waiter.done():
                 continue
             if tenant_id in self._active_tenants:
@@ -169,6 +181,16 @@ def _priority_rank(priority: Priority) -> int:
         priority.value,
         PRIORITY_POLICIES[Priority.NORMAL.value],
     )["rank"]
+
+
+def _record_queue_depth_delta(priority: str, delta: int) -> None:
+    TASK_QUEUE_DEPTH.add(
+        delta,
+        {
+            "queue": "priority_scheduler",
+            "priority": priority,
+        },
+    )
 
 
 # Limit concurrent task executions while keeping each tenant single-flight.

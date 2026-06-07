@@ -139,6 +139,7 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("http_server_duration_milliseconds", response.text)
         self.assertIn("agent_tasks_total", response.text)
+        self.assertIn("agent_task_queue_depth", response.text)
         self.assertIn("agent_llm_requests_total", response.text)
         self.assertIn("X-Trace-Id", response.headers)
 
@@ -385,6 +386,40 @@ class ObservabilityTests(unittest.TestCase):
         running, active_tenants = asyncio.run(run_test())
         self.assertEqual(running, 0)
         self.assertEqual(active_tenants, set())
+
+    def test_scheduler_updates_queue_depth_metric(self) -> None:
+        async def run_test() -> list[tuple[int, dict]]:
+            metric_calls = []
+
+            def record_metric(delta: int, attrs: dict) -> None:
+                metric_calls.append((delta, attrs))
+
+            scheduler = main._PriorityTaskScheduler(1)
+            with patch.object(main.TASK_QUEUE_DEPTH, "add", side_effect=record_metric):
+                active_slot = await scheduler.acquire("tenant-active", Priority.NORMAL)
+
+                waiter = asyncio.create_task(
+                    scheduler.acquire("tenant-waiting", Priority.LOW)
+                )
+                await asyncio.sleep(0)
+                waiter.cancel()
+                with suppress(asyncio.CancelledError):
+                    await waiter
+
+                await active_slot.release()
+
+            return metric_calls
+
+        metric_calls = asyncio.run(run_test())
+        self.assertEqual(
+            metric_calls,
+            [
+                (1, {"queue": "priority_scheduler", "priority": "normal"}),
+                (-1, {"queue": "priority_scheduler", "priority": "normal"}),
+                (1, {"queue": "priority_scheduler", "priority": "low"}),
+                (-1, {"queue": "priority_scheduler", "priority": "low"}),
+            ],
+        )
 
     def test_timeout_path_records_timeout_metric(self) -> None:
         async def slow_run_task(*args, **kwargs):
