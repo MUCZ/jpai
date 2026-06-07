@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   agent-service:
     build: .
@@ -7,12 +5,51 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - mock-llm
+      mock-llm:
+        condition: service_started
+      otel-backend:
+        condition: service_healthy
     environment:
       - LLM_SERVER_URL=http://mock-llm:8081
+      - OTEL_SERVICE_NAME=agent-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-backend:4317
 
   mock-llm:
     build: .
     command: uvicorn src.mock_llm_server:app --host 0.0.0.0 --port 8081
     ports:
       - "8081:8081"
+
+  otel-backend:
+    image: grafana/otel-lgtm:latest
+    ports:
+      - "3000:3000"   # Grafana
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      retries: 12
+      start_period: 10s
+    environment:
+      - GF_USERS_DEFAULT_THEME=light
+      - GF_SECURITY_ADMIN_PASSWORD=admin # Static admin password to avoid manual UI token generation
+    volumes:
+      - ./conf/prometheus/prometheus.yaml:/otel-lgtm/prometheus.yaml
+      - ./conf/grafana/provisioning/dashboard/provider.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/custom-provider.yaml
+      - ./conf/grafana/provisioning/dashboard/custom:/otel-lgtm/grafana/conf/provisioning/dashboards/custom
+
+  mcp-grafana:
+    image: grafana/mcp-grafana:latest
+    container_name: mcp-grafana
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - GRAFANA_URL=http://otel-backend:3000 
+      - GRAFANA_USERNAME=admin
+      - GRAFANA_PASSWORD=admin
+    command: -t streamable-http # Run as persistent SSE server for remote/host MCP clients
+    depends_on:
+      otel-backend:
+        condition: service_healthy
