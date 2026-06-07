@@ -268,9 +268,7 @@ At this stage, we also use agents to verify whether the fixes are effective.
 
 
 # 6. Any cases where AI gave incorrect results and how you caught and handled them 
-## Problem 1
-
-### Scenario 1: Priority Queue Modification Issues
+### Case 1: Priority Queue Modification Issues
 The refactoring of the priority queue introduced issues across two distinct phases:
 * **Phase 1 (Ineffective Change):** Tenant-specific queues were introduced without proper alignment. While rate limiting was applied to the global queue, it was omitted from the tenant-specific queues, rendering the modification ineffective.
 * **Phase 2 (Throughput Degradation):** Priority queues were implemented at both the global and tenant levels. This triggered a hidden queue backlog issue: the service initially operated normally, but throughput gradually degraded to zero over time, eventually causing all tasks to fail.
@@ -283,10 +281,7 @@ The refactoring of the priority queue introduced issues across two distinct phas
 ### Resolution
 * Passed the issue details to the Agent to automate the fix. The detailed remediation workflow is documented in **Section 5**.
 
-
-## Problem 2
-
-### Scenario 2: Priority Field in Cache Key
+### Case 2: Priority Field in Cache Key
 
 Cache keys should structurally exclude task priority. In a specific version, the Agent unilaterally introduced a priority field into the cache key design. This architectural error prevented requests with different priorities from sharing the same cached data, ultimately driving down the system's overall cache hit rate.
 
