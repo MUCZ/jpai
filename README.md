@@ -14,7 +14,7 @@
 
 3. Infrastructure Files: [Docker Compose](./agent-platform/docker-compose.yml) | [Other Config](./agent-platform/conf)
 
-4. [Production Deployment Instructions](PRODUCTION_DEPLOYMENT.md)
+4. [Production Deployment Instructions](DEPLOYMENT.md)
 
 5. [README.md with AI Tool Usage description (this file)](README.md)
 
