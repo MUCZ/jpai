@@ -55,7 +55,7 @@ Note that the current fix is still quite simple. In a production environment, we
 2. We still lack an overload protection mechanism. Currently, all tasks are added to our message queue indiscriminately, even when the system is already under heavy load.  This will be discussed in detail in the later sections of this document.
 
 ## 6. Before-After Comparision
-See `FIX.md`
+See [FIX.md](FIX.md)
 
 ---
 # Issue 2. Unbounded in-memory state causes eventual OOM, Data loss occurred because the state was not persisted.
@@ -91,7 +91,7 @@ The service keeps task results and audit records in module-level memory without 
     2. We may also want to use RDS/MongoDB/Other Database to replace the current TaskStore and utilize Kafka/RabbitMQ/Other Message Queue to export these logs to a reliable storage system for subsequent auditing and statistical analysis.
 
 ## 6. Before-After Comparision
-See `FIX.md`
+See [FIX.md](FIX.md)
 
 ---
 # Issue 3. Lacks a rate-limiting protection mechanism. 
@@ -108,4 +108,4 @@ The scheduling mechanism does not enforce a maximum queue depth or dynamically e
 ## 5. Fix Proposition
 
 ## 6. Before-After Comparision
-See `FIX.md`
+See [FIX.md](FIX.md)
